@@ -193,6 +193,13 @@
            disabled:opacity-50 disabled:cursor-not-allowed;
   }
 
+  .btn-compact-secondary {
+    @apply rounded border border-pv-ink/[0.15] bg-pv-surface2/70 px-3 py-2 font-semibold text-pv-text
+           transition-[transform,background-color,border-color] duration-200 ease-out
+           hover:-translate-y-px hover:border-pv-emerald/35 hover:bg-pv-emerald/[0.08]
+           active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .btn-primary,
     .btn-ghost,
@@ -200,7 +207,8 @@
     .btn-fuch,
     .btn-emerald,
     .btn-danger,
-    .btn-compact-primary {
+    .btn-compact-primary,
+    .btn-compact-secondary {
       @apply hover:translate-y-0 hover:shadow-none;
       transition-duration: 0.01ms;
     }
