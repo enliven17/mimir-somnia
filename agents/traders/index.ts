@@ -1,55 +1,31 @@
 /**
- * Mimir demo BYOA traders — three Groq-backed agents that stake their own USDC.
+ * DreamDEX-native BYOA traders.
  *
- * These exist to make the agents and basket pages real: they register through the
- * same public agent API a third party would use, then stake from their own funded
- * wallets on Somnia Shannon. Mimir never holds their keys in a route or a bundle —
- * only this worker process does, exactly like the legacy personas.
- *
- * Deliberately NOT using the spend-permission path: these agents own their wallets,
- * so they sign their own transactions. The permission path exists for agents that
- * cannot sign, and is authorised by the same API either way.
- *
- * Run: npx tsx agents/traders/index.ts
- * Env: TRADER_<NAME>_PRIVATE_KEY, GROQ_API_KEY, DATABASE_URL,
- *      NEXT_PUBLIC_CONTRACT_ADDRESS, SOMNIA_RPC_URL
- *      TRADER_POLL_INTERVAL_MS=900000  (poll cadence, default 15m)
- *      TRADER_MAX_STAKES_PER_CYCLE=1   (stakes per trader per cycle)
- *      TRADER_DRY_RUN=1                (decide and log, stake nothing)
+ * Each persona owns a local EOA, reads indexed binary markets, chooses YES or
+ * NO, and submits a bounded market buy through the official exchange SDK.
+ * Private keys stay in this worker process and never enter a route or bundle.
  */
-
-// Groq for the traders regardless of what the rest of the fleet uses: their whole
-// point is to be a second, independent opinion from the Gemini-backed council.
 process.env.LLM_PROVIDER = "groq";
 
-import { randomUUID } from "node:crypto";
-
-import { createSomniaPublicClient, getContractAddress, getExplorerTxUrl, weiToStt } from "../../lib/chain";
-const weiToEth = weiToStt;
-import { agentContractWrite, loadAgentWallet, type AgentWallet } from "../../lib/agent-wallets";
+import { createSomniaPublicClient, weiToStt } from "../../lib/chain";
+import { loadAgentWallet, type AgentWallet } from "../../lib/agent-wallets";
+import {
+  getDreamDexPortfolio,
+  loadDreamDexMarkets,
+  withDreamDexSigner,
+  type DreamDexMarket,
+} from "../../lib/dreamdex-market";
+import { DREAMDEX_NETWORK } from "../../lib/dreamdex";
 import { callLLM, activeLLMModel, activeLLMProvider, extractJson } from "../../lib/llm";
-import { fetchWithBudget, payingWalletFor } from "../../lib/x402/buyer";
-import { PRICES, priceToUsdcUnits } from "../../lib/x402/config";
-import { MIMIR_ABI } from "../../lib/mimir-abi";
 import { reportingPoll } from "../../lib/ops/heartbeat";
 import { AUTHORITY_LEVELS, defaultLimits, REGISTRY_SCHEMA_VERSION, type AgentRecord } from "../../lib/agents/registry";
 import { loadAgent, saveAgent } from "../../lib/agents/store";
-import { getClaimsByFilter, getChallengersByClaimId } from "../../lib/db";
-import { unitsToUsdc, usdcToUnits, USDC_ADDRESS, ERC20_ABI } from "../../lib/usdc";
 import { TRADER_PERSONAS, isTraderVerdict, shouldStake, type TraderPersona, type TraderVerdict } from "./personas";
 
 const POLL_INTERVAL_MS = Number(process.env.TRADER_POLL_INTERVAL_MS ?? "900000");
-const MAX_STAKES_PER_CYCLE = Number(process.env.TRADER_MAX_STAKES_PER_CYCLE ?? "1");
+const MAX_TRADES_PER_CYCLE = Number(process.env.TRADER_MAX_STAKES_PER_CYCLE ?? "1");
 const DRY_RUN = process.env.TRADER_DRY_RUN === "1";
-/** Leave a margin so a trader never spends its last cent of gas mid-cycle. */
-const MIN_GAS_ETH = 0.0008;
-/**
- * Where to buy a second opinion. Agents paying agents is the point of x402 here:
- * the trader spends real USDC, the oracle earns it, and the revenue ledger records
- * a transfer that actually happened rather than a number we made up.
- */
-const MIMIR_URL = (process.env.MIMIR_URL ?? "").replace(/\/$/, "");
-const BUY_SECOND_OPINION = process.env.TRADER_BUY_ORACLE !== "0";
+const MIN_GAS_STT = 0.0008;
 
 interface Decision {
   verdict: TraderVerdict;
@@ -65,13 +41,11 @@ function walletFor(persona: TraderPersona): AgentWallet | null {
   }
 }
 
-/**
- * Register on first run so the agent appears in the registry and on /agents.
- *
- * Written straight to the store rather than posted to the HTTP API: these are
- * first-party agents in the same process as the database, and a self-call over
- * the network would only add a failure mode. The record is identical either way.
- */
+function privateKeyFor(persona: TraderPersona): `0x${string}` | null {
+  const raw = process.env[persona.keyEnv]?.trim();
+  return raw && /^0x[0-9a-fA-F]{64}$/.test(raw) ? raw as `0x${string}` : null;
+}
+
 async function ensureRegistered(persona: TraderPersona, wallet: AgentWallet): Promise<AgentRecord> {
   const existing = await loadAgent(persona.agentId);
   if (existing) return existing;
@@ -85,7 +59,7 @@ async function ensureRegistered(persona: TraderPersona, wallet: AgentWallet): Pr
     payoutWallet: wallet.address.toLowerCase(),
     displayName: persona.displayName,
     description: persona.description,
-    capabilities: ["council_juror", "researcher"],
+    capabilities: ["researcher"],
     authorityLevel: AUTHORITY_LEVELS.STAKE,
     limits: { ...defaultLimits(), maxPositionUsdc: persona.stakeUsdc, maxDailyExposureUsdc: persona.stakeUsdc * 4 },
     status: "active",
@@ -98,96 +72,39 @@ async function ensureRegistered(persona: TraderPersona, wallet: AgentWallet): Pr
   return record;
 }
 
-function decisionPrompt(persona: TraderPersona, claim: {
-  question: string | null; creator_position: string | null; counter_position: string | null;
-  category: string; deadline: number; creator_stake: number; total_challenger_stake: number;
-  settlement_rule: string | null;
-}): string {
-  const hoursLeft = Math.max(0, Math.round((claim.deadline * 1000 - Date.now()) / 3_600_000));
+function decisionPrompt(persona: TraderPersona, market: DreamDexMarket): string {
+  const hoursLeft = Math.max(0, Math.round((market.expiry * 1000 - Date.now()) / 3_600_000));
   return `${persona.strategy}
 
-## Claim
-Question: ${claim.question ?? "(missing)"}
-Creator's position: ${claim.creator_position ?? "(unstated)"}
-Opposing position: ${claim.counter_position ?? "(unstated)"}
-Category: ${claim.category}
-Settles: ${claim.settlement_rule ?? "(no rule given)"}
+## Binary market
+Question: ${market.question || "(missing)"}
+Asset: ${market.asset}
+Oracle rule: ${market.oracleQuestion ?? "protocol oracle"}
+Current YES probability: ${market.lastPrice === null ? "unknown" : `${(market.lastPrice * 100).toFixed(2)}%`}
+Settles at: ${new Date(market.expiry * 1000).toISOString()}
 Time remaining: ${hoursLeft}h
-Staked so far: creator ${claim.creator_stake} USDC vs challengers ${claim.total_challenger_stake} USDC
+Observed volume: ${market.volume.toFixed(4)} collateral
 
 ## Your decision
-You may only take the opposing side, and only with your own money. Say DISAGREE to
-stake against the creator's position, AGREE to leave it alone, ABSTAIN if the claim
-cannot be judged from what is here.
+Choose the outcome you would buy with your own money. Say YES or NO to enter that
+outcome, or ABSTAIN if the market cannot be judged from the information here.
 
 ## Calibrating confidence
 Use the whole range. An unanchored 60 for everything is not a judgement.
 - 50: a coin flip. Say ABSTAIN instead.
 - 55-65: a lean you would not back with money.
 - 66-79: you can name the specific evidence that makes your side more likely.
-- 80+: the claim needs something unusual to happen in the time left.
-Give the number your reasoning actually supports, high or low.
+- 80+: the market needs something unusual to resolve against your side.
 
 Reply with JSON only:
-{"verdict":"AGREE"|"DISAGREE"|"ABSTAIN","confidence":0-100,"reasoning":"one or two sentences in your own voice, naming the specific evidence"}`;
+{"verdict":"YES"|"NO"|"ABSTAIN","confidence":0-100,"reasoning":"one or two sentences naming the specific evidence"}`;
 }
 
-/**
- * Buy the oracle's read on a claim over x402.
- *
- * Returns null on any failure — a paid call that did not land is a missing input,
- * not a reason to skip the cycle. The trader then decides on its own, which is
- * exactly what it would have done before this existed.
- */
-async function buyOracleOpinion(
-  wallet: AgentWallet,
-  claim: { question: string | null; creator_position: string | null; counter_position: string | null; resolution_url: string | null; settlement_rule: string | null },
-): Promise<string | null> {
-  if (!BUY_SECOND_OPINION || !MIMIR_URL) return null;
-  if (!claim.question || !claim.resolution_url) return null;
-  try {
-    const { response, payment } = await fetchWithBudget(
-      `${MIMIR_URL}/api/oracle`,
-      payingWalletFor(wallet),
-      priceToUsdcUnits(PRICES.oracle),
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          question: claim.question,
-          sideA: claim.creator_position ?? "Yes",
-          sideB: claim.counter_position ?? "No",
-          evidenceUrl: claim.resolution_url,
-          settlementRule: claim.settlement_rule ?? undefined,
-        }),
-      },
-    );
-    if (!response.ok) return null;
-    const verdict = await response.json() as { verdict?: string; confidence?: number; explanation?: string };
-    if (payment?.txHash) {
-      console.log(`[traders]   paid ${PRICES.oracle} for an oracle read — ${payment.txHash.slice(0, 12)}…`);
-    }
-    return `Oracle (paid ${PRICES.oracle}): ${verdict.verdict ?? "?"} at ${verdict.confidence ?? "?"}% — ${String(verdict.explanation ?? "").slice(0, 200)}`;
-  } catch (err) {
-    console.warn("[traders]   oracle purchase failed:", err instanceof Error ? err.message : err);
-    return null;
-  }
-}
-
-async function decide(
-  persona: TraderPersona,
-  claim: Parameters<typeof decisionPrompt>[1],
-  secondOpinion: string | null,
-): Promise<Decision> {
-  const prompt = secondOpinion
-    ? `${decisionPrompt(persona, claim)}
-
-## A second opinion you paid for
-${secondOpinion}
-Weigh it against your own read. Agreeing with it is not automatic.`
-    : decisionPrompt(persona, claim);
-  const text = await callLLM(prompt, {
-    maxTokens: 400, jsonOnly: true, temperature: 0.3,
+async function decide(persona: TraderPersona, market: DreamDexMarket): Promise<Decision> {
+  const text = await callLLM(decisionPrompt(persona, market), {
+    maxTokens: 400,
+    jsonOnly: true,
+    temperature: 0.3,
   });
   try {
     const parsed = JSON.parse(extractJson(text) ?? "{}") as Partial<Decision>;
@@ -195,112 +112,110 @@ Weigh it against your own read. Agreeing with it is not automatic.`
     const confidence = Math.max(0, Math.min(100, Math.round(Number(parsed.confidence ?? 0))));
     return { verdict, confidence, reasoning: String(parsed.reasoning ?? "").slice(0, 300) };
   } catch {
-    // An unparsable answer is not a signal to bet on.
-    return { verdict: "ABSTAIN", confidence: 0, reasoning: "[unparsable model response]" };
+    return { verdict: "ABSTAIN", confidence: 0, reasoning: "unparsable model response" };
   }
 }
 
-async function usdcBalance(address: `0x${string}`): Promise<bigint> {
-  return (await createSomniaPublicClient().readContract({
-    address: USDC_ADDRESS, abi: ERC20_ABI, functionName: "balanceOf", args: [address],
-  })) as bigint;
-}
-
-/** Claims this trader can still join: open, unexpired, and not already its own. */
-async function joinableFor(wallet: AgentWallet) {
-  const rows = await getClaimsByFilter({ states: ["open", "active"], orderBy: "deadline_asc", limit: 25 });
+async function tradableFor(wallet: AgentWallet): Promise<DreamDexMarket[]> {
+  const markets = await loadDreamDexMarkets({ includeInactive: false });
   const nowSeconds = Math.floor(Date.now() / 1000);
-  const mine = wallet.address.toLowerCase();
-  const joinable: typeof rows = [];
-  for (const claim of rows) {
-    if (claim.deadline <= nowSeconds + 300) continue;      // too close to settle into
-    if (claim.creator.toLowerCase() === mine) continue;     // never challenge yourself
-    if (claim.visibility !== "public") continue;
-    const challengers = await getChallengersByClaimId(claim.id).catch(() => []);
-    if (challengers.some((c) => c.address.toLowerCase() === mine)) continue; // one position each
-    joinable.push(claim);
-  }
-  return joinable;
+  const portfolio = await getDreamDexPortfolio(wallet.address).catch(() => null);
+  const activeOrders = new Set((portfolio?.openOrders ?? []).map((order) => order.market.toLowerCase()));
+  return markets.filter((market) =>
+    market.status === "Trading" &&
+    market.expiry > nowSeconds + 300 &&
+    !activeOrders.has(market.symbol.toLowerCase()),
+  );
+}
+
+function collateralBalance(balances: Record<string, { total: number }>): number {
+  return Object.entries(balances)
+    .find(([code]) => !code.includes("#") && /usdc|usdso|usd/i.test(code))?.[1].total ?? 0;
 }
 
 async function runTrader(persona: TraderPersona): Promise<void> {
   const wallet = walletFor(persona);
-  if (!wallet) {
-    console.log(`[traders] ${persona.emoji} ${persona.agentId}: ${persona.keyEnv} not set, skipping`);
+  const privateKey = privateKeyFor(persona);
+  if (!wallet || !privateKey) {
+    console.log(`[traders] ${persona.emoji} ${persona.agentId}: key not set or invalid, skipping`);
     return;
   }
   await ensureRegistered(persona, wallet);
 
-  const [gas, usdc] = await Promise.all([
-    createSomniaPublicClient().getBalance({ address: wallet.address }),
-    usdcBalance(wallet.address),
-  ]);
-  const stakeUnits = usdcToUnits(persona.stakeUsdc);
-  console.log(`[traders] ${persona.emoji} ${persona.displayName} · ${weiToEth(gas).toFixed(4)} ETH · ${unitsToUsdc(usdc).toFixed(2)} USDC`);
+  const gas = await createSomniaPublicClient().getBalance({ address: wallet.address });
+  console.log(`[traders] ${persona.emoji} ${persona.displayName} · ${weiToStt(gas).toFixed(4)} STT`);
+  if (weiToStt(gas) < MIN_GAS_STT) return void console.log("[traders]   out of gas, standing aside");
 
-  if (weiToStt(gas) < MIN_GAS_ETH) return void console.log(`[traders]   out of gas, standing aside`);
-  if (usdc < stakeUnits) return void console.log(`[traders]   below ${persona.stakeUsdc} USDC, standing aside`);
+  const markets = await tradableFor(wallet);
+  if (!markets.length) return void console.log("[traders]   nothing tradable this cycle");
 
-  const joinable = await joinableFor(wallet);
-  if (joinable.length === 0) return void console.log(`[traders]   nothing joinable this cycle`);
-
-  let staked = 0;
-  for (const claim of joinable) {
-    if (staked >= MAX_STAKES_PER_CYCLE) break;
-    const secondOpinion = await buyOracleOpinion(wallet, claim);
-    const decision = await decide(persona, claim, secondOpinion);
-    const take = shouldStake(decision.verdict, decision.confidence, persona);
-    console.log(`[traders]   #${claim.id} ${decision.verdict} ${decision.confidence}% ${take ? "→ STAKE" : "→ pass"} · ${decision.reasoning.slice(0, 90)}`);
-    if (!take) continue;
-    if (DRY_RUN) {
-      console.log(`[traders]   DRY_RUN — would stake ${persona.stakeUsdc} USDC on #${claim.id}`);
-      staked += 1;
-      continue;
+  await withDreamDexSigner(privateKey, async (exchange) => {
+    const balance = collateralBalance(await exchange.fetchBalance());
+    console.log(`[traders]   collateral ${balance.toFixed(4)}`);
+    if (balance < persona.stakeUsdc) {
+      console.log(`[traders]   below ${persona.stakeUsdc} collateral, standing aside`);
+      return;
     }
-    try {
-      const tx = await agentContractWrite({
-        wallet, contractAddress: getContractAddress(), abi: MIMIR_ABI,
-        functionName: "challengeClaim",
-        args: [BigInt(claim.id), stakeUnits, ""],
-        amountUsdc: String(persona.stakeUsdc),
-      });
-      console.log(`[traders]   ✓ staked ${persona.stakeUsdc} USDC on #${claim.id} — ${getExplorerTxUrl(tx)}`);
-      staked += 1;
-    } catch (err) {
-      // A revert is one claim's problem, not the cycle's: keep going.
-      console.warn(`[traders]   ✗ #${claim.id} stake failed:`, err instanceof Error ? err.message : err);
+
+    let traded = 0;
+    for (const market of markets) {
+      if (traded >= MAX_TRADES_PER_CYCLE) break;
+      const decision = await decide(persona, market);
+      const take = shouldStake(decision.verdict, decision.confidence, persona);
+      console.log(`[traders]   ${market.id.slice(0, 10)} ${decision.verdict} ${decision.confidence}% ${take ? "BUY" : "pass"} · ${decision.reasoning.slice(0, 90)}`);
+      if (!take) continue;
+
+      const outcome = decision.verdict as "YES" | "NO";
+      const symbol = outcome === "YES" ? market.yesSymbol : market.noSymbol;
+      if (DRY_RUN) {
+        console.log(`[traders]   DRY_RUN — would buy ${outcome} for ${persona.stakeUsdc} collateral on ${market.symbol}`);
+        traded += 1;
+        continue;
+      }
+
+      try {
+        const book = await exchange.fetchOrderBook(symbol, 5);
+        const bestAsk = book.asks[0]?.[0];
+        if (!bestAsk || bestAsk <= 0) {
+          console.log(`[traders]   ${market.symbol} has no ask, skipping`);
+          continue;
+        }
+        const quantity = persona.stakeUsdc / bestAsk;
+        const order = await exchange.createOrder(symbol, "market", "buy", quantity, undefined, { slippage: 0.03 });
+        console.log(`[traders]   bought ${outcome} on ${market.symbol} · ${order.txHash ?? order.id}`);
+        traded += 1;
+      } catch (error) {
+        console.warn(`[traders]   ${market.symbol} order failed:`, error instanceof Error ? error.message : error);
+      }
     }
-  }
+  });
 }
 
 async function poll(): Promise<void> {
-  console.log(`\n[traders] ── Cycle at ${new Date().toISOString()} · ${TRADER_PERSONAS.length} traders`);
+  console.log(`\n[traders] cycle at ${new Date().toISOString()} · ${TRADER_PERSONAS.length} traders`);
   for (const persona of TRADER_PERSONAS) {
     try {
       await runTrader(persona);
-    } catch (err) {
-      console.error(`[traders] ${persona.agentId} failed:`, err instanceof Error ? err.message : err);
+    } catch (error) {
+      console.error(`[traders] ${persona.agentId} failed:`, error instanceof Error ? error.message : error);
     }
   }
 }
 
 async function main(): Promise<void> {
-  console.log("═══════════════════════════════════════════════");
-  console.log("  Mimir demo BYOA traders");
-  console.log(`  Contract   : ${getContractAddress()}`);
-  console.log(`  LLM        : ${activeLLMProvider()} / ${activeLLMModel()}`);
-  console.log(`  Traders    : ${TRADER_PERSONAS.map((p) => p.agentId).join(", ")}`);
-  console.log(`  Stake      : ${TRADER_PERSONAS[0].stakeUsdc} USDC · max ${MAX_STAKES_PER_CYCLE}/cycle each`);
-  console.log(`  Poll every : ${POLL_INTERVAL_MS / 1000}s${DRY_RUN ? " · DRY RUN" : ""}`);
-  console.log("═══════════════════════════════════════════════\n");
+  console.log("DreamDEX trader workers");
+  console.log(`  Network: ${DREAMDEX_NETWORK}`);
+  console.log(`  LLM: ${activeLLMProvider()} / ${activeLLMModel()}`);
+  console.log(`  Traders: ${TRADER_PERSONAS.map((persona) => persona.agentId).join(", ")}`);
+  console.log(`  Budget: ${TRADER_PERSONAS[0].stakeUsdc} collateral · max ${MAX_TRADES_PER_CYCLE}/cycle each`);
+  console.log(`  Poll every: ${POLL_INTERVAL_MS / 1000}s${DRY_RUN ? " · DRY RUN" : ""}`);
 
-  void randomUUID; // reserved for per-cycle correlation ids
   const safePoll = () => reportingPoll("traders", "traders", POLL_INTERVAL_MS / 1000, poll);
   await safePoll();
   setInterval(safePoll, POLL_INTERVAL_MS);
 }
 
-main().catch((err) => {
-  console.error("[traders] Fatal:", err);
+main().catch((error) => {
+  console.error("[traders] fatal:", error);
   process.exit(1);
 });

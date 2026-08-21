@@ -62,21 +62,20 @@ export const TRADER_PERSONAS: readonly TraderPersona[] = [
   },
 ];
 
-export type TraderVerdict = "AGREE" | "DISAGREE" | "ABSTAIN";
+export type TraderVerdict = "YES" | "NO" | "ABSTAIN";
 
 export function isTraderVerdict(value: unknown): value is TraderVerdict {
-  return value === "AGREE" || value === "DISAGREE" || value === "ABSTAIN";
+  return value === "YES" || value === "NO" || value === "ABSTAIN";
 }
 
 /**
- * A trader only stakes against a claim, never with it: the creator's side is
- * already funded, so the only position available to a newcomer is the challenge.
- * DISAGREE therefore means "stake", AGREE means "leave it alone".
+ * A trader only enters when the model chooses an outcome and clears its
+ * confidence threshold. ABSTAIN keeps uncertainty from becoming an order.
  */
 export function shouldStake(
   verdict: TraderVerdict,
   confidence: number,
   persona: Pick<TraderPersona, "minConfidence">,
 ): boolean {
-  return verdict === "DISAGREE" && confidence >= persona.minConfidence;
+  return verdict !== "ABSTAIN" && confidence >= persona.minConfidence;
 }

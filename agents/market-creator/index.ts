@@ -42,6 +42,9 @@ import {
   agentContractWrite,
   getCreatorWallet,
 } from "../../lib/agent-wallets";
+import { createExchange, DREAMDEX_NETWORK } from "../../lib/dreamdex";
+import { loadDreamDexMarkets } from "../../lib/dreamdex-market";
+import { isAddress, type Address } from "viem";
 import { payingWalletFor } from "../../lib/x402/buyer";
 import { MIMIR_ABI, STATE } from "../../lib/mimir-abi";
 import { reportingPoll } from "../../lib/ops/heartbeat";
@@ -794,6 +797,52 @@ async function createClaim(candidate: ClaimCandidate): Promise<string | null> {
 // expired-OPEN claims (created by other addresses, no challenger, no
 // cancellation rights) into "unresolved" and falsely saturates the cap.
 
+/**
+ * DreamDEX market-creator bridge. A rolling series is the protocol-native
+ * creation primitive: research selects candidates, while the configured
+ * series controls the on-chain asset, cadence, oracle and expiry.
+ */
+async function createDreamDexMarket(candidate: ClaimCandidate): Promise<string | null> {
+  const creatorRaw = process.env.DREAMDEX_MARKET_CREATOR_ADDRESS?.trim();
+  const seriesId = Number(process.env.DREAMDEX_SERIES_ID ?? "");
+  const key = process.env.CREATOR_PRIVATE_KEY?.trim();
+  if (!creatorRaw || !isAddress(creatorRaw) || !Number.isInteger(seriesId) || seriesId < 0 || !key || !/^0x[0-9a-fA-F]{64}$/.test(key)) {
+    console.warn("[market-creator] DreamDEX creator series is not configured; keeping this candidate as a proposal");
+    return null;
+  }
+
+  try {
+    const exchange = createExchange({ privateKey: key as `0x${string}` });
+    try {
+      const admin = exchange.client.createMarketCreatorAdmin({ privateKey: key as `0x${string}` });
+      const result = await admin.triggerRoll({ creator: creatorRaw as Address, seriesId });
+      console.log(`[market-creator] DreamDEX series ${seriesId} rolled for ${candidate.category}`);
+      return result.hash;
+    } finally {
+      await exchange.close().catch(() => undefined);
+    }
+  } catch (error) {
+    console.error("[market-creator] DreamDEX series roll failed:", error);
+    return null;
+  }
+}
+
+async function dreamDexInventory(): Promise<{ cancelled: number; joinable: number; joinableClaims: ExistingClaimSignature[] }> {
+  const markets = await loadDreamDexMarkets({ includeInactive: false });
+  const now = Math.floor(Date.now() / 1000);
+  const live = markets.filter((market) => market.status === "Trading" && market.expiry > now);
+  return {
+    cancelled: 0,
+    joinable: live.length,
+    joinableClaims: live.map((market, index) => ({
+      id: index + 1,
+      category: market.asset.toLowerCase(),
+      questionKey: normalizeComparableText(market.question),
+      resolutionUrlKey: normalizeComparableText(market.oracleQuestion ?? ""),
+    })),
+  };
+}
+
 const CREATOR_ADDR_LC = CREATOR_ADDR.toLowerCase();
 
 async function sweepAndCount(): Promise<{ cancelled: number; joinable: number; joinableClaims: ExistingClaimSignature[] }> {
@@ -943,7 +992,7 @@ async function run(): Promise<void> {
   // claim walk. Joinable count drives the cap — getPlatformStats was wrong
   // here because it counted CANCELLED and abandoned expired-OPEN claims as
   // "unresolved" and deadlocked the creator at the cap forever.
-  const { cancelled, joinable, joinableClaims } = await sweepAndCount();
+  const { cancelled, joinable, joinableClaims } = await dreamDexInventory();
   if (cancelled > 0) {
     console.log(`[market-creator] Cancelled ${cancelled} stale claim(s) — stake refunded.`);
   }
@@ -1023,7 +1072,7 @@ async function run(): Promise<void> {
     }
 
     console.log(`\n[market-creator] Creating: "${candidate.question.slice(0, 60)}..."`);
-    const txHash = await createClaim(candidate);
+    const txHash = await createDreamDexMarket(candidate);
     if (txHash) {
       console.log(`[market-creator] ✓ Created — ${getExplorerTxUrl(txHash)}`);
       created++;
