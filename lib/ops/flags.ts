@@ -1,0 +1,251 @@
+/**
+ * Feature flags and incident kill switches.
+ *
+ * The requirement that shapes this: during an incident, create / stake / copy /
+ * x402 must be pausable **independently**. A single global "maintenance mode" is
+ * useless in practice — if the facilitator is down you want to stop selling paid
+ * endpoints while people can still settle and withdraw, and if a pricing bug is
+ * found you want to stop new stakes without freezing payouts.
+ *
+ * Two rules:
+ *
+ *  1. **Withdrawal is never pausable.** Users must always be able to pull a parked
+ *     payout, even mid-incident. There is deliberately no switch for it — an
+ *     operator cannot accidentally trap funds.
+ *  2. **Read paths stay up.** Pausing writes must not blank the explorer, because a
+ *     status page nobody can reach is not a status page.
+ *
+ * Env-driven so a switch can be flipped without a deploy.
+ */
+
+/** Capabilities that can be paused independently during an incident. */
+export const PAUSABLE = [
+  "create_market",
+  "stake",
+  "copy_execution",
+  "x402_selling",
+  "x402_buying",
+  "agent_registration",
+  "market_creator_worker",
+  "council_worker",
+  "oracle_settlement",
+] as const;
+export type Pausable = (typeof PAUSABLE)[number];
+
+export function isPausable(value: string): value is Pausable {
+  return (PAUSABLE as readonly string[]).includes(value);
+}
+
+/**
+ * Things that must never be switchable, kept explicit so the invariant is
+ * documented in code rather than remembered.
+ */
+export const NEVER_PAUSABLE = ["withdraw", "read_markets", "read_reasoning"] as const;
+export type NeverPausable = (typeof NEVER_PAUSABLE)[number];
+
+export function isNeverPausable(value: string): value is NeverPausable {
+  return (NEVER_PAUSABLE as readonly string[]).includes(value);
+}
+
+/** MIMIR_PAUSE_STAKE=1 pauses staking. */
+function envKeyFor(capability: Pausable): string {
+  return `MIMIR_PAUSE_${capability.toUpperCase()}`;
+}
+
+export interface PauseState {
+  paused: boolean;
+  /** Operator-supplied reason, surfaced to users so a block is explainable. */
+  reason?: string;
+  /** True when everything was paused at once. */
+  viaGlobal: boolean;
+}
+
+/**
+ * Is this capability paused?
+ *
+ * `MIMIR_PAUSE_ALL` exists for the one case where an operator genuinely wants
+ * everything down, but it still cannot touch the never-pausable list.
+ */
+export function pauseState(
+  capability: Pausable,
+  env: Record<string, string | undefined> = process.env,
+): PauseState {
+  const specific = env[envKeyFor(capability)] === "1";
+  if (specific) {
+    return {
+      paused: true,
+      reason: env[`${envKeyFor(capability)}_REASON`] ?? env.MIMIR_PAUSE_REASON,
+      viaGlobal: false,
+    };
+  }
+  if (env.MIMIR_PAUSE_ALL === "1") {
+    return { paused: true, reason: env.MIMIR_PAUSE_REASON, viaGlobal: true };
+  }
+  return { paused: false, viaGlobal: false };
+}
+
+export function isPaused(
+  capability: Pausable,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return pauseState(capability, env).paused;
+}
+
+/** Everything currently paused, for a status endpoint and the ops dashboard. */
+export function pausedCapabilities(
+  env: Record<string, string | undefined> = process.env,
+): Pausable[] {
+  return PAUSABLE.filter((capability) => isPaused(capability, env));
+}
+
+// ── Feature flags ─────────────────────────────────────────────────────────────
+
+/**
+ * Rollout flags, distinct from pause switches: a flag gates something not yet
+ * finished, a pause stops something that works but must stop NOW. Conflating them
+ * means an incident pause looks like an unfinished feature in the logs.
+ */
+export const FEATURES = [
+  "duel_mode",
+  "fixed_odds",
+  "underdog_discovery",
+  "rematch_ladder",
+  "streak_scoring",
+  "conviction_scoring",
+  "reasoning_feed",
+  "share_cards",
+  "byoa_registry",
+  "byoa_funded_actions",
+  "copy_trading",
+  "virtual_baskets",
+  "agent_baskets",
+  "fee_policy",
+] as const;
+export type Feature = (typeof FEATURES)[number];
+
+export function isFeature(value: string): value is Feature {
+  return (FEATURES as readonly string[]).includes(value);
+}
+
+/**
+ * Default state per feature. Anything that can move a user's money without an
+ * explicit per-action signature defaults OFF, and stays off until its own gate in
+ * the roadmap is met — a flag is not a substitute for that review.
+ */
+const FEATURE_DEFAULTS: Record<Feature, boolean> = {
+  duel_mode: true,
+  fixed_odds: true,
+  underdog_discovery: true,
+  rematch_ladder: true,
+  streak_scoring: true,
+  conviction_scoring: true,
+  reasoning_feed: true,
+  share_cards: true,
+  // Registration is read-only in effect; funded actions are not.
+  byoa_registry: true,
+  byoa_funded_actions: false,
+  copy_trading: false,
+  virtual_baskets: true,
+  agent_baskets: false,
+  // Fees only exist in MimirV2, which is unaudited and holds nothing yet. Turning
+  // this on before that contract is live would charge fees the escrow cannot pay.
+  fee_policy: false,
+};
+
+function featureEnvKey(feature: Feature): string {
+  return `MIMIR_FEATURE_${feature.toUpperCase()}`;
+}
+
+export function isFeatureEnabled(
+  feature: Feature,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const raw = env[featureEnvKey(feature)];
+  if (raw === "1") return true;
+  if (raw === "0") return false;
+  return FEATURE_DEFAULTS[feature];
+}
+
+/** Features that are off by default because they need a review gate first. */
+export function gatedFeatures(): Feature[] {
+  return FEATURES.filter((feature) => !FEATURE_DEFAULTS[feature]);
+}
+
+// ── Per-category kill switch ──────────────────────────────────────────────────
+
+/**
+ * Stop creating markets in one category without a deploy.
+ *
+ * Distinct from the compliance gate in `lib/research/categories.ts`, which decides
+ * whether a category is ever permissible. This is the operational case: a category
+ * that is allowed in principle is producing bad settlements right now and should
+ * stop until someone looks at it.
+ *
+ * Disable-list rather than an allow-list on purpose — an allow-list that has to be
+ * kept in sync with the category registry silently drops a new category the day it
+ * ships.
+ */
+export function isCategoryEnabled(
+  categoryId: string,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const id = categoryId.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+  if (id.length === 0) return false;
+  return env[`MIMIR_DISABLE_CATEGORY_${id}`] !== "1";
+}
+
+/** Categories an operator has switched off, for a status endpoint. */
+export function disabledCategories(
+  categoryIds: readonly string[],
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  return categoryIds.filter((id) => !isCategoryEnabled(id, env));
+}
+
+// ── The single gate a write path calls ────────────────────────────────────────
+
+export type WriteBlockReason = "feature_disabled" | "category_disabled" | "paused";
+
+export interface WriteGateResult {
+  allowed: boolean;
+  reason?: WriteBlockReason;
+  /** Human-readable, shown to the user so a block is explainable. */
+  detail?: string;
+}
+
+/**
+ * Check a write is permitted: its feature is on AND its capability is not paused.
+ *
+ * Feature first: "this is not available yet" is a truer message than "temporarily
+ * paused" for something that was never enabled.
+ */
+export function checkWriteAllowed(
+  args: { feature?: Feature; capability: Pausable; category?: string },
+  env: Record<string, string | undefined> = process.env,
+): WriteGateResult {
+  if (args.feature && !isFeatureEnabled(args.feature, env)) {
+    return {
+      allowed: false,
+      reason: "feature_disabled",
+      detail: `${args.feature.replace(/_/g, " ")} is not enabled`,
+    };
+  }
+  if (args.category && !isCategoryEnabled(args.category, env)) {
+    return {
+      allowed: false,
+      reason: "category_disabled",
+      detail: `${args.category} markets are temporarily disabled`,
+    };
+  }
+  const pause = pauseState(args.capability, env);
+  if (pause.paused) {
+    return {
+      allowed: false,
+      reason: "paused",
+      detail:
+        pause.reason ??
+        `${args.capability.replace(/_/g, " ")} is temporarily paused${pause.viaGlobal ? " (all writes)" : ""}`,
+    };
+  }
+  return { allowed: true };
+}

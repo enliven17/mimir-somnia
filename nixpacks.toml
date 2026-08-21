@@ -1,0 +1,5 @@
+# Pin Node 22 for Railway / any Nixpacks-driven CI.
+# The x402 v2 SDKs (@x402/core, @x402/evm, @x402/next) target Node 22, and our
+# agent scripts use `tsx --env-file-if-exists`.
+[phases.setup]
+nixPkgs = ["nodejs_22", "npm-10_x"]

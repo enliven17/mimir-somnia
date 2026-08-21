@@ -1,0 +1,106 @@
+/**
+ * Follow a basket by mirroring it, not by depositing into it.
+ *
+ * ADR-0008 forbids taking funds into a basket before audit and legal review, and
+ * that boundary is the point rather than an inconvenience: nothing here custodies
+ * anyone's money. A subscription records an intent — "mirror this basket's members
+ * at N USDC per market, from my own wallet" — and every resulting stake is signed
+ * by the subscriber.
+ *
+ * So the worst case of a bug here is a subscription row nobody asked for, not a
+ * balance nobody can withdraw.
+ */
+
+import { NextResponse, type NextRequest } from "next/server";
+import { verifyMessage } from "viem";
+
+import { apiError } from "@/lib/api/errors";
+import { authorizeRequest } from "@/lib/api/policy";
+import { findAnyBasketDefinition } from "@/lib/server/basket-directory";
+import { subscribeToBasket, unsubscribeFromBasket } from "@/lib/db";
+
+export const dynamic = "force-dynamic";
+
+/** Signed by the subscriber. States the cap in the text they actually see. */
+export function subscribeMessage(args: {
+  basketId: string; subscriber: string; perMarketUsdc: number;
+}): string {
+  return [
+    "Mimir basket subscription",
+    `basket: ${args.basketId}`,
+    `subscriber: ${args.subscriber.toLowerCase()}`,
+    `per market: ${args.perMarketUsdc} USDC`,
+    "Mimir never holds your funds. Every stake is signed by you.",
+  ].join("\n");
+}
+
+/** A mirror that can drain an account is not a feature anyone asked for. */
+const MAX_PER_MARKET_USDC = 100;
+
+function clientIp(req: NextRequest): string | undefined {
+  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || undefined;
+}
+
+export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params;
+  const gate = authorizeRequest("public_read", { route: "/api/baskets/subscribe", ip: clientIp(req) });
+  if (!gate.allowed && gate.error) {
+    return NextResponse.json(gate.error.body, { status: gate.error.status, headers: gate.error.headers });
+  }
+
+  let body: { subscriber?: string; perMarketUsdc?: number; signature?: `0x${string}`; unsubscribe?: boolean };
+  try {
+    body = await req.json();
+  } catch {
+    const err = apiError("invalid_request", "invalid JSON");
+    return NextResponse.json(err.body, { status: err.status });
+  }
+
+  const subscriber = String(body.subscriber ?? "").toLowerCase();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(subscriber)) {
+    const err = apiError("invalid_request", "subscriber must be an address");
+    return NextResponse.json(err.body, { status: err.status });
+  }
+
+  const basket = await findAnyBasketDefinition(id).catch(() => null);
+  if (!basket) {
+    const err = apiError("not_found", "no such basket");
+    return NextResponse.json(err.body, { status: err.status });
+  }
+
+  const perMarketUsdc = Number(body.perMarketUsdc ?? 0);
+  if (!body.unsubscribe && (!Number.isFinite(perMarketUsdc) || perMarketUsdc <= 0 || perMarketUsdc > MAX_PER_MARKET_USDC)) {
+    const err = apiError("invalid_request", `per-market amount must be between 0 and ${MAX_PER_MARKET_USDC} USDC`);
+    return NextResponse.json(err.body, { status: err.status });
+  }
+
+  const signature = body.signature;
+  if (!signature || !/^0x[0-9a-fA-F]+$/.test(signature)) {
+    const err = apiError("invalid_signature", "subscriber signature is required");
+    return NextResponse.json(err.body, { status: err.status });
+  }
+  const valid = await verifyMessage({
+    address: subscriber as `0x${string}`,
+    message: subscribeMessage({ basketId: id, subscriber, perMarketUsdc }),
+    signature,
+  }).catch(() => false);
+  if (!valid) {
+    const err = apiError("invalid_signature", "signature rejected");
+    return NextResponse.json(err.body, { status: err.status });
+  }
+
+  if (body.unsubscribe) {
+    await unsubscribeFromBasket(id, subscriber, Date.now());
+    return NextResponse.json({ subscribed: false }, { headers: { "cache-control": "no-store" } });
+  }
+
+  await subscribeToBasket({ basketId: id, subscriber, perMarketUsdc, at: Date.now() });
+  return NextResponse.json(
+    {
+      subscribed: true,
+      perMarketUsdc,
+      note: "Mimir holds no funds. Each mirrored stake is a transaction you sign.",
+    },
+    { headers: { "cache-control": "no-store" } },
+  );
+}

@@ -1,0 +1,279 @@
+import Link from "next/link";
+import {
+  createSomniaPublicClient,
+  getContractAddress,
+  getDeployBlock,
+  getExplorerAddressUrl,
+  getExplorerTxUrl,
+  isContractConfigured,
+  weiToStt,
+  paginatedGetLogs,
+} from "@/lib/chain";
+import { unitsToUsdc } from "@/lib/usdc";
+import {
+  getActiveCouncilPersonas,
+} from "@/lib/council-resolver";
+import type { PersonaSpec } from "@/agents/council/personas";
+import { BlueprintHeading } from "@/components/BlueprintGrid";
+import { openPeepsAvatar } from "@/lib/avatars";
+import { AddressChip } from "@/components/ui/AddressChip";
+
+export const revalidate = 30;
+
+// ── Data ─────────────────────────────────────────────────────────────────────
+
+interface PersonaStats {
+  persona:         PersonaSpec;
+  address:         string;
+  balanceEth:     number;
+  stakesPlaced:    number;
+  totalStakedUsdc: number;
+  recentBets:      Array<{
+    claimId:      number;
+    stakeUsdc:    number;
+    txHash:       string;
+    blockNumber:  number;
+  }>;
+}
+
+async function fetchCouncilStats(): Promise<PersonaStats[]> {
+  if (!isContractConfigured()) return [];
+  const client    = createSomniaPublicClient();
+  const address   = getContractAddress();
+  const fromBlock = getDeployBlock();
+  const personas  = getActiveCouncilPersonas();
+
+  if (personas.length === 0) return [];
+
+  let challengeLogs: any[] = [];
+  try {
+    challengeLogs = await paginatedGetLogs(client, {
+      address,
+      event: {
+        type: "event",
+        name: "ClaimChallenged",
+        inputs: [
+          { name: "id",         type: "uint256", indexed: true },
+          { name: "challenger", type: "address", indexed: true },
+          { name: "stake",      type: "uint256", indexed: false },
+        ],
+      } as any,
+    }, fromBlock);
+  } catch (err) {
+    console.error("[council] fetchCouncilStats: log fetch failed:", err);
+  }
+
+  const byActor = new Map<string, Array<any>>();
+  for (const log of challengeLogs) {
+    const actor = String(log.args.challenger ?? "").toLowerCase();
+    if (!actor) continue;
+    const list = byActor.get(actor) ?? [];
+    list.push(log);
+    byActor.set(actor, list);
+  }
+
+  return Promise.all(
+    personas.map(async ({ persona, address: addr }) => {
+      const lowerAddr = addr.toLowerCase();
+      const logs = byActor.get(lowerAddr) ?? [];
+
+      let balance = 0n;
+      try {
+        balance = await client.getBalance({ address: addr as `0x${string}` });
+      } catch {
+        balance = 0n;
+      }
+
+      const totalStakedUnits = logs.reduce<bigint>(
+        (acc, log: any) => acc + BigInt(log.args.stake ?? 0),
+        0n,
+      );
+      const sortedLogs = logs.slice().sort(
+        (a: any, b: any) => Number(b.blockNumber ?? 0) - Number(a.blockNumber ?? 0),
+      );
+
+      return {
+        persona,
+        address: addr,
+        balanceEth:     weiToStt(balance), // gas wallet (native ETH)
+        stakesPlaced:    logs.length,
+        totalStakedUsdc: unitsToUsdc(totalStakedUnits), // USDC stakes
+        recentBets:      sortedLogs.slice(0, 3).map((log: any) => ({
+          claimId:     Number(log.args.id ?? 0),
+          stakeUsdc:   unitsToUsdc(BigInt(log.args.stake ?? 0)),
+          txHash:      log.transactionHash,
+          blockNumber: Number(log.blockNumber ?? 0),
+        })),
+      };
+    }),
+  );
+}
+
+// ── UI ───────────────────────────────────────────────────────────────────────
+
+const ARCHETYPE_LABEL: Record<PersonaSpec["archetype"], string> = {
+  "llm-biased":  "LLM · biased",
+  "rule-based":  "Rule · no LLM",
+  "specialist":  "Specialist · category-filtered",
+  "micro":       "Micro · low threshold",
+};
+
+function PersonaCard({ stats }: { stats: PersonaStats }) {
+  const { persona, address, balanceEth, stakesPlaced, totalStakedUsdc, recentBets } = stats;
+  const active = stakesPlaced > 0;
+
+  return (
+    <article className="flex h-full flex-col gap-4 rounded-2xl border border-pv-border/30 bg-pv-surface/70 p-5 transition-colors hover:border-pv-border/60">
+      <header className="flex items-start gap-3">
+        <span
+          className={`relative flex size-14 shrink-0 items-center justify-center rounded-2xl border ${persona.accent.border} ${persona.accent.bg}`}
+          aria-hidden
+        >
+          <span className="absolute inset-0 overflow-hidden rounded-2xl">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={openPeepsAvatar(`council-${persona.slug}`)}
+              alt=""
+              className="h-full w-full object-cover object-top opacity-95"
+            />
+          </span>
+          <span className="absolute -bottom-1 -right-1 flex size-6 items-center justify-center rounded-full border border-pv-bg bg-pv-surface2 text-[13px] leading-none shadow-[0_4px_12px_rgba(0,0,0,0.35)]">
+            {persona.emoji}
+          </span>
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-display text-base font-bold tracking-tight text-pv-text">
+            {persona.displayName}
+          </h3>
+          <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.18em] text-pv-muted">
+            {ARCHETYPE_LABEL[persona.archetype]}
+          </p>
+        </div>
+      </header>
+
+      {/* Clamped to two lines: bios differ by a sentence, and letting that ripple
+          through the card leaves four cards in a row with four different baselines. */}
+      <p className="line-clamp-2 min-h-[2.75rem] text-[12px] leading-relaxed text-pv-text/75">{persona.bio}</p>
+
+      {persona.categoryFilter && persona.categoryFilter.length > 0 && (
+        <div className="flex flex-wrap gap-1 font-mono text-[10px] uppercase tracking-[0.14em] text-pv-muted">
+          {persona.categoryFilter.map((c) => (
+            <span key={c} className="rounded border border-pv-border/40 px-1.5 py-0.5">{c}</span>
+          ))}
+        </div>
+      )}
+
+      <dl className="mt-auto grid grid-cols-3 gap-2 border-t border-pv-border/30 pt-3 text-center">
+        <div>
+          <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-pv-muted">balance</dt>
+          <dd className="mt-0.5 font-display text-sm font-bold tabular-nums text-pv-text">
+            {balanceEth.toFixed(2)}
+          </dd>
+        </div>
+        <div>
+          <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-pv-muted">stakes</dt>
+          <dd className={`mt-0.5 font-display text-sm font-bold tabular-nums ${active ? "text-pv-emerald" : "text-pv-text"}`}>
+            {stakesPlaced}
+          </dd>
+        </div>
+        <div>
+          <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-pv-muted">at risk</dt>
+          <dd className="mt-0.5 font-display text-sm font-bold tabular-nums text-pv-text">
+            {totalStakedUsdc.toFixed(2)}
+          </dd>
+        </div>
+      </dl>
+
+      <div className="min-h-[3.25rem]">
+      {recentBets.length > 0 ? (
+        <ul className="space-y-1.5 border-t border-pv-border/30 pt-3">
+          {recentBets.map((b) => (
+            <li key={b.txHash} className="flex items-baseline justify-between gap-2 font-mono text-[10px]">
+              <Link href={`/vs/${b.claimId}`} className="text-pv-emerald hover:underline">
+                claim #{b.claimId}
+              </Link>
+              <span className="tabular-nums text-pv-text/85">{b.stakeUsdc.toFixed(2)} USDC</span>
+              <a
+                href={getExplorerTxUrl(b.txHash)}
+                target="_blank"
+                rel="noreferrer"
+                className="text-pv-muted hover:text-pv-emerald"
+              >
+                tx ↗
+              </a>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="border-t border-pv-border/30 pt-3 text-center font-mono text-[10px] italic text-pv-muted">
+          no bets yet — waiting for an in-character market
+        </p>
+      )}
+      </div>
+
+      <div className="flex justify-center">
+        <AddressChip address={address} label={persona.displayName} className="text-[10px]" />
+      </div>
+    </article>
+  );
+}
+
+// ── Page ─────────────────────────────────────────────────────────────────────
+
+export default async function CouncilPage() {
+  const stats = await fetchCouncilStats();
+
+  const totalStakes       = stats.reduce((acc, s) => acc + s.stakesPlaced, 0);
+  const totalStakedUsdc   = stats.reduce((acc, s) => acc + s.totalStakedUsdc, 0);
+  const totalBankrollBot = stats.reduce((acc, s) => acc + s.balanceEth, 0);
+
+  return (
+    <div className="pb-10">
+      <BlueprintHeading>Twenty AI frames. Twenty local wallets. One market.</BlueprintHeading>
+      <div className="mx-auto max-w-[1200px] px-4 pt-6 sm:px-6 lg:px-8">
+      <header className="mb-10 space-y-1.5">
+        <p className="mx-auto max-w-2xl text-center text-sm text-pv-muted">
+          Each persona reads the same claims and the same evidence but reaches different
+          verdicts based on character — optimists tilt up, doomers tilt down, contrarians
+          chase imbalance, specialists only touch their domain. Every stake below is a real
+          on-chain USDC stake signed by that persona&apos;s local worker key.
+        </p>
+        {stats.length > 0 && (
+          <div className="flex flex-wrap items-center justify-center gap-2 pt-2 font-mono text-[11px] uppercase tracking-[0.16em]">
+            <span className="rounded-md border border-pv-border/40 bg-pv-surface2/40 px-2 py-1 text-pv-muted">
+              {stats.length} active
+            </span>
+            <span className="rounded-md border border-pv-border/40 bg-pv-surface2/40 px-2 py-1 text-pv-muted">
+              {totalStakes} stakes
+            </span>
+            <span className="rounded-md border border-pv-border/40 bg-pv-surface2/40 px-2 py-1 text-pv-muted">
+              <span className="tabular-nums text-pv-text">{totalStakedUsdc.toFixed(2)}</span> USDC at risk
+            </span>
+            <span className="rounded-md border border-pv-border/40 bg-pv-surface2/40 px-2 py-1 text-pv-muted">
+              bankroll <span className="tabular-nums text-pv-text">{totalBankrollBot.toFixed(2)}</span> ETH gas
+            </span>
+          </div>
+        )}
+      </header>
+
+      {stats.length === 0 ? (
+        <div className="rounded-2xl border border-pv-border/30 bg-pv-surface/70 p-12 text-center">
+          <p className="text-base text-pv-text">No council personas configured in this deploy.</p>
+          <p className="mt-2 text-sm text-pv-muted">
+            Run <code className="font-mono text-pv-emerald">npm run agents:create-wallets</code> to provision the 10 local council keys, then add the resulting <code className="font-mono text-pv-emerald">COUNCIL_&lt;SLUG&gt;_ADDRESS</code> env vars to this deploy.
+          </p>
+        </div>
+      ) : (
+        <section className="grid gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {stats.map((s) => <PersonaCard key={s.persona.slug} stats={s} />)}
+        </section>
+      )}
+
+      <nav className="mt-10 flex flex-wrap justify-center gap-x-6 gap-y-2 text-sm">
+        <Link href="/agents" className="text-pv-muted transition-colors hover:text-pv-text">← all agent activity</Link>
+        <Link href="/stats" className="text-pv-muted transition-colors hover:text-pv-text">aggregate stats →</Link>
+      </nav>
+      </div>
+    </div>
+  );
+}

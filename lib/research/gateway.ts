@@ -1,0 +1,373 @@
+/**
+ * Research Gateway — the only way an agent reaches the outside world.
+ *
+ * Agents never fetch directly. Every request goes through here so that four
+ * things are true at once:
+ *
+ *   1. SSRF is impossible (see ./ssrf.ts). The resolved IP is checked at EVERY
+ *      redirect hop, not just on the first URL, because a public page can 302
+ *      into the metadata service.
+ *   2. Responses are bounded. Size, time and redirect count all have ceilings, so
+ *      a hostile or broken source cannot exhaust the worker.
+ *   3. Per-agent budgets are enforced by the gateway, not by the agent asking
+ *      politely. An agent that has spent its request budget is refused.
+ *   4. Identical fetches are cached, so a source is neither hammered nor paid for
+ *      twice within a cycle.
+ *
+ * Redirects are followed MANUALLY (`redirect: "manual"`) — the whole point is to
+ * re-validate each hop, which `fetch`'s automatic following makes impossible.
+ */
+
+import { lookup } from "node:dns/promises";
+import { keccak256, toBytes } from "viem";
+import {
+  checkDomainPolicy,
+  checkResolvedAddresses,
+  checkUrl,
+  domainPolicyFromEnv,
+  type DomainPolicy,
+  type SsrfReason,
+} from "./ssrf";
+import { recordSourceFailure } from "./telemetry";
+
+export const MAX_REDIRECTS = 3;
+export const MAX_RESPONSE_BYTES = 512 * 1024;
+export const REQUEST_TIMEOUT_MS = 10_000;
+
+/** Text-ish types only: the gateway exists to read sources, not to download files. */
+const ALLOWED_CONTENT_TYPES = [
+  "text/html",
+  "text/plain",
+  "application/json",
+  "application/xml",
+  "text/xml",
+  "application/rss+xml",
+  "application/atom+xml",
+  "application/ld+json",
+];
+
+export type FetchFailure =
+  | { kind: "paused"; detail: string }
+  | { kind: "blocked"; reason: SsrfReason; detail: string }
+  | { kind: "budget"; detail: string }
+  | { kind: "too_many_redirects"; detail: string }
+  | { kind: "content_type"; detail: string }
+  | { kind: "too_large"; detail: string }
+  | { kind: "http_error"; status: number; detail: string }
+  | { kind: "transport"; detail: string };
+
+export interface FetchSuccess {
+  url: string;
+  /** The URL actually served, after redirects. */
+  finalUrl: string;
+  status: number;
+  contentType: string;
+  body: string;
+  /** keccak256 of the body, so a reader can verify the capture later. */
+  contentHash: string;
+  capturedAt: number;
+  bytes: number;
+  fromCache: boolean;
+  redirects: number;
+}
+
+export type FetchResult =
+  | ({ ok: true } & FetchSuccess)
+  | ({ ok: false } & FetchFailure);
+
+// ── Per-agent budget ──────────────────────────────────────────────────────────
+
+export interface AgentBudget {
+  /** Requests this agent may make in the current window. */
+  maxRequests: number;
+  /** Bytes this agent may download in the current window. */
+  maxBytes: number;
+}
+
+interface BudgetUsage {
+  requests: number;
+  bytes: number;
+  windowStartedAt: number;
+}
+
+const BUDGET_WINDOW_MS = 60 * 60 * 1000;
+const usage = new Map<string, BudgetUsage>();
+
+export function defaultAgentBudget(): AgentBudget {
+  return {
+    maxRequests: Number(process.env.RESEARCH_MAX_REQUESTS_PER_AGENT ?? 120),
+    maxBytes: Number(process.env.RESEARCH_MAX_BYTES_PER_AGENT ?? 8 * 1024 * 1024),
+  };
+}
+
+function currentUsage(agentId: string, now: number): BudgetUsage {
+  const existing = usage.get(agentId);
+  if (!existing || now - existing.windowStartedAt > BUDGET_WINDOW_MS) {
+    const fresh = { requests: 0, bytes: 0, windowStartedAt: now };
+    usage.set(agentId, fresh);
+    return fresh;
+  }
+  return existing;
+}
+
+/** Remaining allowance, for the agent-facing status endpoint. */
+export function budgetRemaining(agentId: string, budget = defaultAgentBudget(), now = Date.now()) {
+  const used = currentUsage(agentId, now);
+  return {
+    requests: Math.max(0, budget.maxRequests - used.requests),
+    bytes: Math.max(0, budget.maxBytes - used.bytes),
+    windowResetsAt: used.windowStartedAt + BUDGET_WINDOW_MS,
+  };
+}
+
+/** Test seam — the budget window is process-local by design. */
+export function resetBudgets(): void {
+  usage.clear();
+}
+
+// ── Response cache ────────────────────────────────────────────────────────────
+
+interface CacheEntry {
+  value: FetchSuccess;
+  expiresAt: number;
+}
+
+const cache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = Number(process.env.RESEARCH_CACHE_TTL_MS ?? 5 * 60 * 1000);
+const MAX_CACHE_ENTRIES = 500;
+
+export function resetResearchCache(): void {
+  cache.clear();
+}
+
+function cacheGet(url: string, now: number): FetchSuccess | null {
+  const entry = cache.get(url);
+  if (!entry) return null;
+  if (entry.expiresAt <= now) {
+    cache.delete(url);
+    return null;
+  }
+  return entry.value;
+}
+
+function cacheSet(url: string, value: FetchSuccess, now: number): void {
+  if (cache.size >= MAX_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest) cache.delete(oldest);
+  }
+  cache.set(url, { value, expiresAt: now + CACHE_TTL_MS });
+}
+
+// ── Validation of one hop ─────────────────────────────────────────────────────
+
+/**
+ * Validate a single URL: static checks, operator domain policy, then DNS. Called
+ * for the original URL AND for every redirect target.
+ */
+export async function validateHop(
+  url: string,
+  policy: DomainPolicy,
+  resolve: (host: string) => Promise<string[]> = defaultResolve,
+): Promise<{ allowed: true } | { allowed: false; reason: SsrfReason; detail: string }> {
+  const staticCheck = checkUrl(url);
+  if (!staticCheck.allowed) {
+    return { allowed: false, reason: staticCheck.reason!, detail: staticCheck.detail! };
+  }
+  const policyCheck = checkDomainPolicy(url, policy);
+  if (!policyCheck.allowed) {
+    return { allowed: false, reason: policyCheck.reason!, detail: policyCheck.detail! };
+  }
+
+  // DNS last: it is the expensive check, and it is the one that catches a public
+  // hostname pointing at a private address.
+  let addresses: string[];
+  try {
+    addresses = await resolve(new URL(url).hostname);
+  } catch {
+    return { allowed: false, reason: "malformed", detail: "host did not resolve" };
+  }
+  const dnsCheck = checkResolvedAddresses(addresses);
+  if (!dnsCheck.allowed) {
+    return { allowed: false, reason: dnsCheck.reason!, detail: dnsCheck.detail! };
+  }
+  return { allowed: true };
+}
+
+async function defaultResolve(host: string): Promise<string[]> {
+  const records = await lookup(host, { all: true, verbatim: true });
+  return records.map((record) => record.address);
+}
+
+// ── The fetch ─────────────────────────────────────────────────────────────────
+
+export interface GatewayFetchArgs {
+  url: string;
+  /** Registry id of the requesting agent, for budget accounting. */
+  agentId: string;
+  policy?: DomainPolicy;
+  budget?: AgentBudget;
+  /** Test seams. */
+  resolve?: (host: string) => Promise<string[]>;
+  fetchImpl?: typeof globalThis.fetch;
+  now?: number;
+}
+
+function contentTypeAllowed(contentType: string): boolean {
+  const base = contentType.split(";")[0]!.trim().toLowerCase();
+  return ALLOWED_CONTENT_TYPES.includes(base);
+}
+
+/**
+ * Read a bounded prefix of the body. Streaming with a running total, so a source
+ * that lies in Content-Length (or omits it) still cannot blow the limit.
+ */
+async function readBounded(response: Response, limit: number): Promise<{ text: string; bytes: number; truncated: boolean }> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const text = await response.text();
+    const bytes = Buffer.byteLength(text);
+    return bytes > limit
+      ? { text: text.slice(0, limit), bytes: limit, truncated: true }
+      : { text, bytes, truncated: false };
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let truncated = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > limit) {
+      chunks.push(value.slice(0, value.byteLength - (total - limit)));
+      truncated = true;
+      await reader.cancel().catch(() => {});
+      break;
+    }
+    chunks.push(value);
+  }
+  const buffer = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+  return { text: buffer.toString("utf8"), bytes: buffer.byteLength, truncated };
+}
+
+/**
+ * Fetch one source through the gateway.
+ *
+ * Never throws: an agent asking for a hostile URL gets a typed refusal, which is
+ * information it can act on, rather than an exception that kills a settlement.
+ */
+export async function gatewayFetch(args: GatewayFetchArgs): Promise<FetchResult> {
+  const now = args.now ?? Date.now();
+  const fail = <T extends FetchFailure>(failure: T): { ok: false } & T => {
+    recordSourceFailure(failure.kind);
+    return { ok: false, ...failure };
+  };
+  const policy = args.policy ?? domainPolicyFromEnv();
+  const budget = args.budget ?? defaultAgentBudget();
+  const doFetch = args.fetchImpl ?? fetch;
+
+  const pausedAgents = new Set((process.env.RESEARCH_PAUSED_AGENT_IDS ?? "").split(",").map((id) => id.trim().toLowerCase()).filter(Boolean));
+  if (process.env.MIMIR_PAUSE_RESEARCH === "1" || pausedAgents.has(args.agentId.trim().toLowerCase())) {
+    return fail({ kind: "paused", detail: `research is paused for agent '${args.agentId}'` });
+  }
+
+  const cached = cacheGet(args.url, now);
+  if (cached) return { ok: true, ...cached, fromCache: true };
+
+  // Budget is checked BEFORE the request, and charged whether or not the response
+  // is useful — a refused-after-connect request still cost the source a hit.
+  const used = currentUsage(args.agentId, now);
+  if (used.requests >= budget.maxRequests) {
+    return fail({
+      kind: "budget",
+      detail: `agent '${args.agentId}' has used its ${budget.maxRequests} request budget`,
+    });
+  }
+  if (used.bytes >= budget.maxBytes) {
+    return fail({
+      kind: "budget",
+      detail: `agent '${args.agentId}' has used its ${budget.maxBytes} byte budget`,
+    });
+  }
+
+  let current = args.url;
+  let redirects = 0;
+
+  for (;;) {
+    const hop = await validateHop(current, policy, args.resolve);
+    if (!hop.allowed) {
+      return fail({ kind: "blocked", reason: hop.reason, detail: hop.detail });
+    }
+
+    used.requests += 1;
+
+    let response: Response;
+    try {
+      response = await doFetch(current, {
+        // Manual, so every hop is re-validated. Automatic following would let a
+        // public page redirect us into the metadata service unchecked.
+        redirect: "manual",
+        headers: {
+          accept: ALLOWED_CONTENT_TYPES.join(", "),
+          "user-agent": "Mimir-ResearchGateway/1.0 (+https://mimir.app)",
+        },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        cache: "no-store",
+      });
+    } catch (err) {
+      return fail({
+        kind: "transport",
+        detail: err instanceof Error ? err.message : "fetch failed",
+      });
+    }
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (!location) {
+        return fail({ kind: "http_error", status: response.status, detail: "redirect without a location" });
+      }
+      redirects += 1;
+      if (redirects > MAX_REDIRECTS) {
+        return fail({ kind: "too_many_redirects", detail: `more than ${MAX_REDIRECTS} redirects` });
+      }
+      try {
+        current = new URL(location, current).toString();
+      } catch {
+        return fail({ kind: "http_error", status: response.status, detail: "unparseable redirect target" });
+      }
+      continue;
+    }
+
+    if (!response.ok) {
+      return fail({ kind: "http_error", status: response.status, detail: `upstream ${response.status}` });
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentTypeAllowed(contentType)) {
+      return fail({ kind: "content_type", detail: `unsupported content-type '${contentType}'` });
+    }
+
+    const { text, bytes, truncated } = await readBounded(response, MAX_RESPONSE_BYTES);
+    used.bytes += bytes;
+    if (truncated) {
+      // A truncated source is a silent correctness hazard for settlement, so it
+      // is a refusal rather than a partial success.
+      return fail({ kind: "too_large", detail: `response exceeds ${MAX_RESPONSE_BYTES} bytes` });
+    }
+
+    const success: FetchSuccess = {
+      url: args.url,
+      finalUrl: current,
+      status: response.status,
+      contentType,
+      body: text,
+      contentHash: keccak256(toBytes(text)),
+      capturedAt: now,
+      bytes,
+      fromCache: false,
+      redirects,
+    };
+    cacheSet(args.url, success, now);
+    return { ok: true, ...success };
+  }
+}

@@ -1,0 +1,218 @@
+/**
+ * SSRF defence for the Research Gateway.
+ *
+ * Agents pick the URLs they fetch, and those URLs come from LLM output derived
+ * from web pages. That makes every fetch attacker-influenced, so the gateway is
+ * the trust boundary between "an agent asked for a page" and "our server made a
+ * request from inside the network".
+ *
+ * The dangerous requests are not exotic:
+ *   - http://169.254.169.254/  cloud instance metadata → credentials
+ *   - http://localhost:3000/    our own API, from inside, with no auth hop
+ *   - http://10.0.0.5/          anything else in the VPC
+ *   - file:///etc/passwd        local files
+ *   - a public host that RESOLVES to a private address (DNS rebinding)
+ *   - a public URL that REDIRECTS to one of the above
+ *
+ * The last two are why an allowlist alone is insufficient and why the resolved
+ * IP must be checked, at every hop, immediately before connecting.
+ */
+
+/** Only these two schemes can ever be fetched. */
+const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
+
+/** Hostnames that must never be resolved, let alone connected to. */
+const BLOCKED_HOSTNAMES = new Set([
+  "localhost",
+  "localhost.localdomain",
+  "ip6-localhost",
+  "ip6-loopback",
+  // AWS/GCP/Azure instance metadata, including the DNS aliases.
+  "metadata",
+  "metadata.google.internal",
+  "metadata.goog",
+  "instance-data",
+]);
+
+/** Suffixes that resolve inside a private network by convention. */
+const BLOCKED_SUFFIXES = [".localhost", ".local", ".internal", ".intranet", ".lan", ".home.arpa"];
+
+export type SsrfReason =
+  | "protocol"
+  | "hostname"
+  | "private_ip"
+  | "credentials"
+  | "port"
+  | "malformed";
+
+export interface UrlVerdict {
+  allowed: boolean;
+  reason?: SsrfReason;
+  detail?: string;
+}
+
+const ALLOW = { allowed: true } as const;
+
+function deny(reason: SsrfReason, detail: string): UrlVerdict {
+  return { allowed: false, reason, detail };
+}
+
+/**
+ * Ports worth allowing. Blocking everything else stops the gateway being used to
+ * probe internal services (Redis on 6379, Postgres on 5432, …) for open ports.
+ */
+const ALLOWED_PORTS = new Set(["", "80", "443", "8080", "8443"]);
+
+// ── IP literal classification ─────────────────────────────────────────────────
+
+function ipv4ToParts(host: string): number[] | null {
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!match) return null;
+  const parts = match.slice(1).map(Number);
+  return parts.every((n) => n >= 0 && n <= 255) ? parts : null;
+}
+
+/** True for loopback, private, link-local, CGNAT, multicast and reserved space. */
+export function isPrivateIpv4(host: string): boolean {
+  const parts = ipv4ToParts(host);
+  if (!parts) return false;
+  const [a, b] = parts;
+  if (a === 0) return true; // "this network"
+  if (a === 10) return true; // private
+  if (a === 127) return true; // loopback
+  if (a === 169 && b === 254) return true; // link-local, incl. 169.254.169.254
+  if (a === 172 && b >= 16 && b <= 31) return true; // private
+  if (a === 192 && b === 168) return true; // private
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+  if (a === 192 && b === 0) return true; // IETF protocol assignments
+  if (a >= 224) return true; // multicast + reserved
+  return false;
+}
+
+/** True for IPv6 loopback, link-local, unique-local and IPv4-mapped privates. */
+export function isPrivateIpv6(host: string): boolean {
+  const normalized = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (normalized === "::1" || normalized === "::") return true;
+  if (/^fe[89ab][0-9a-f]:/.test(normalized)) return true; // link-local fe80::/10
+  if (/^f[cd][0-9a-f]{2}:/.test(normalized)) return true; // unique-local fc00::/7
+  // IPv4-mapped, e.g. ::ffff:127.0.0.1
+  const mapped = /::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(normalized);
+  if (mapped) return isPrivateIpv4(mapped[1]);
+  return false;
+}
+
+export function isPrivateAddress(host: string): boolean {
+  return isPrivateIpv4(host) || isPrivateIpv6(host);
+}
+
+// ── URL-level checks ──────────────────────────────────────────────────────────
+
+/**
+ * Static checks on a URL, before any DNS lookup. Cheap, and rejects the
+ * overwhelming majority of hostile input.
+ */
+export function checkUrl(raw: string): UrlVerdict {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return deny("malformed", "not a parseable URL");
+  }
+
+  if (!ALLOWED_PROTOCOLS.has(url.protocol)) {
+    return deny("protocol", `scheme '${url.protocol}' is not fetchable`);
+  }
+  // Credentials in a URL are a redirect-laundering trick and never legitimate
+  // for a public source.
+  if (url.username || url.password) {
+    return deny("credentials", "URL carries credentials");
+  }
+  if (!ALLOWED_PORTS.has(url.port)) {
+    return deny("port", `port '${url.port}' is not allowed`);
+  }
+
+  const host = url.hostname.toLowerCase();
+  if (BLOCKED_HOSTNAMES.has(host)) return deny("hostname", `'${host}' is blocked`);
+  if (BLOCKED_SUFFIXES.some((suffix) => host.endsWith(suffix))) {
+    return deny("hostname", `'${host}' resolves inside the network`);
+  }
+  if (isPrivateAddress(host)) {
+    return deny("private_ip", `'${host}' is a private address`);
+  }
+
+  return ALLOW;
+}
+
+/**
+ * Post-DNS check. `checkUrl` cannot catch a public hostname whose A record points
+ * at 127.0.0.1 or 169.254.169.254 — that is DNS rebinding, and it is why the
+ * resolved addresses must be validated too.
+ *
+ * ALL resolved addresses must be public: one private answer among several is
+ * enough for an attacker, since which address gets used is not ours to choose.
+ */
+export function checkResolvedAddresses(addresses: string[]): UrlVerdict {
+  if (addresses.length === 0) return deny("malformed", "host did not resolve");
+  for (const address of addresses) {
+    if (isPrivateAddress(address)) {
+      return deny("private_ip", `host resolves to private address ${address}`);
+    }
+  }
+  return ALLOW;
+}
+
+// ── Domain policy ─────────────────────────────────────────────────────────────
+
+export interface DomainPolicy {
+  /** When non-empty, ONLY these domains (and subdomains) may be fetched. */
+  allow: string[];
+  /** Always refused, even if the allowlist would permit them. */
+  deny: string[];
+}
+
+function hostMatches(host: string, pattern: string): boolean {
+  const h = host.toLowerCase();
+  const p = pattern.toLowerCase().replace(/^\*\./, "");
+  return h === p || h.endsWith(`.${p}`);
+}
+
+/**
+ * Apply the operator's domain policy. Deny wins over allow: an explicit block
+ * must not be overridable by a broad allow entry.
+ */
+export function checkDomainPolicy(raw: string, policy: DomainPolicy): UrlVerdict {
+  let host: string;
+  try {
+    host = new URL(raw).hostname.toLowerCase();
+  } catch {
+    return deny("malformed", "not a parseable URL");
+  }
+  if (policy.deny.some((pattern) => hostMatches(host, pattern))) {
+    return deny("hostname", `'${host}' is on the deny list`);
+  }
+  if (policy.allow.length > 0 && !policy.allow.some((pattern) => hostMatches(host, pattern))) {
+    return deny("hostname", `'${host}' is not on the allow list`);
+  }
+  return ALLOW;
+}
+
+/** Parse a comma-separated env value into a domain list. */
+export function parseDomainList(raw: string | undefined): string[] {
+  return (raw ?? "")
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * Reads the operator policy. The parameter is a plain record rather than
+ * NodeJS.ProcessEnv so tests can pass just the two keys that matter.
+ */
+export function domainPolicyFromEnv(
+  env: Record<string, string | undefined> = process.env,
+): DomainPolicy {
+  return {
+    allow: parseDomainList(env.RESEARCH_ALLOWED_DOMAINS),
+    deny: parseDomainList(env.RESEARCH_DENIED_DOMAINS),
+  };
+}

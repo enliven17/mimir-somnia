@@ -1,0 +1,68 @@
+import type { Metadata } from "next";
+import { NextIntlClientProvider } from "next-intl";
+import { getMessages, getTranslations, setRequestLocale } from "next-intl/server";
+import { notFound } from "next/navigation";
+import { routing } from "@/i18n/routing";
+import Header from "@/components/Header";
+import Footer from "@/components/Footer";
+import PageFrame from "@/components/PageFrame";
+import HtmlLang from "@/components/HtmlLang";
+import SkipToContentLink from "../../components/SkipToContentLink";
+import ScrollToTopOnLoad from "../../components/ScrollToTopOnLoad";
+
+type Props = {
+  children: React.ReactNode;
+  params: Promise<{ locale: string }>;
+};
+
+export function generateStaticParams() {
+  return routing.locales.map((locale) => ({ locale }));
+}
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ locale: string }>;
+}): Promise<Metadata> {
+  const { locale } = await params;
+  const t = await getTranslations({ locale, namespace: "metadata" });
+  return {
+    // `%s` with no suffix: a sub-page's tab should read "Philosopher Spread", not
+    // "Philosopher Spread — Mimir …", which truncates to the part nobody needed.
+    title: { default: t("title"), template: "%s" },
+    description: t("description"),
+    openGraph: {
+      title: t("title"),
+      description: t("description"),
+      type: "website",
+    },
+  };
+}
+
+export default async function LocaleLayout({ children, params }: Props) {
+  const { locale } = await params;
+
+  if (!routing.locales.includes(locale as any)) {
+    notFound();
+  }
+
+  setRequestLocale(locale);
+  const messages = await getMessages();
+
+  return (
+    <NextIntlClientProvider messages={messages}>
+      <HtmlLang locale={locale} />
+      <SkipToContentLink />
+      <ScrollToTopOnLoad />
+      <Header />
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="mx-auto min-w-0 max-w-[1200px] px-4 pb-0 pt-[calc(3.5rem+env(safe-area-inset-top))] sm:px-6 lg:px-8"
+      >
+        <PageFrame>{children}</PageFrame>
+      </main>
+      <Footer />
+    </NextIntlClientProvider>
+  );
+}
