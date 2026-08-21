@@ -237,13 +237,25 @@ function getReadExchange() {
   return (readExchange ??= createExchange());
 }
 
+async function loadedMarkets(reload = false): Promise<Record<string, UnifiedMarket>> {
+  const exchange = getReadExchange();
+  if (reload) marketLoad = null;
+  if (!marketLoad) {
+    marketLoad = exchange.loadMarkets().catch((error) => {
+      // A transient indexer/RPC outage must not poison every later request in
+      // this process with the same rejected promise.
+      marketLoad = null;
+      throw error;
+    });
+  }
+  return marketLoad;
+}
+
 export async function loadDreamDexMarkets(options?: {
   reload?: boolean;
   includeInactive?: boolean;
 }): Promise<DreamDexMarket[]> {
-  const exchange = getReadExchange();
-  if (options?.reload) marketLoad = null;
-  const markets = await (marketLoad ??= exchange.loadMarkets());
+  const markets = await loadedMarkets(options?.reload);
   return Object.values(markets)
     .map(toDreamDexMarket)
     .filter((market): market is DreamDexMarket => Boolean(market))
@@ -256,7 +268,7 @@ export async function getDreamDexMarket(ref: string): Promise<{
   unified: BinaryUnifiedMarket;
 }> {
   const exchange = getReadExchange();
-  const markets = await (marketLoad ??= exchange.loadMarkets());
+  const markets = await loadedMarkets();
   const match = Object.values(markets)
     .map((market) => ({ unified: asBinaryMarket(market), market: toDreamDexMarket(market) }))
     .find(({ unified, market }) => {
