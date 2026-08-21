@@ -146,13 +146,12 @@ export default function Header() {
 
   const NAV_ITEMS = useMemo(() => {
     const items: Array<{
-      href: "/vs/create" | "/markets" | "/explorer" | "/dashboard" | "/messages" | "/stats" | "/agents" | "/baskets" | "/council" | "/revenue";
+      href: "/markets" | "/explorer" | "/dashboard" | "/messages" | "/stats" | "/agents" | "/baskets" | "/council" | "/revenue";
       label: string;
       accent: boolean;
       mobileLabel?: string;
     }> = [
-      { href: "/markets", label: "Markets", accent: true },
-      { href: "/vs/create", label: t("challenge"), accent: false },
+      { href: "/markets", label: "Markets", accent: true, mobileLabel: "Markets" },
       { href: "/explorer", label: t("explore"), accent: false },
       { href: "/dashboard", label: t("myVS"), accent: false },
       { href: "/council", label: "Council", accent: false },
