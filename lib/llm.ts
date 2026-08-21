@@ -118,6 +118,7 @@ let openrouterCooldownUntil = 0;
 const groqCooldownByKey = new Map<string, number>();
 // Keyed by `${keyFingerprint}|${model}` — rate limits are per project (key) per model.
 const geminiCooldownByCombo = new Map<string, number>();
+let geminiKeyCursor = 0;
 
 function cooldownRemaining(until: number): number {
   const remaining = until - Date.now();
@@ -143,6 +144,13 @@ function geminiKeyList(): string[] {
     keys.push(key);
   }
   return keys;
+}
+
+/** Rotate the key order so two configured keys share normal traffic, not only failures. */
+function rotatedGeminiKeys(keys: string[]): string[] {
+  if (keys.length < 2) return keys;
+  const start = geminiKeyCursor++ % keys.length;
+  return keys.slice(start).concat(keys.slice(0, start));
 }
 
 function geminiComboCooldown(key: string, model: string): number {
@@ -418,13 +426,13 @@ async function callGemini(
   prompt: string,
   opts: { maxTokens: number; temperature: number; jsonOnly: boolean; model?: string; jsonSchema?: Record<string, unknown> },
 ): Promise<string> {
-  // Try the assigned model first (then borrow other pool models), and for each
-  // model try the primary key first (then backup keys). Limits are per key×model,
+  // Try the assigned model first (then borrow other pool models), and rotate
+  // the key order across calls. Limits are per key×model,
   // so this exhausts every combination before giving up.
   const pool = geminiModelPool();
   const preferred = opts.model && opts.model.trim().length > 0 ? opts.model.trim() : pool[0];
   const models = [preferred, ...pool.filter((m) => m !== preferred)];
-  const keys = geminiKeyList();
+  const keys = rotatedGeminiKeys(geminiKeyList());
 
   let lastError: unknown = null;
   for (const model of models) {
