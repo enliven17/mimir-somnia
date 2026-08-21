@@ -147,7 +147,7 @@ test("the digest covers the nonce, timestamp, chain and idempotency key", () => 
   const base = canonicalRequestDigest(envelope());
   assert.notEqual(base, canonicalRequestDigest(envelope({ nonce: "n-2" })));
   assert.notEqual(base, canonicalRequestDigest(envelope({ timestamp: NOW + 1 })));
-  assert.notEqual(base, canonicalRequestDigest(envelope({ chainId: 8453 })));
+  assert.notEqual(base, canonicalRequestDigest(envelope({ chainId: 50311 })));
   assert.notEqual(base, canonicalRequestDigest(envelope({ idempotencyKey: "k1" })));
 });
 
@@ -218,7 +218,7 @@ test("a signature from a key the registry does not know is rejected", () => {
 });
 
 test("a signature for another chain authorises nothing here", () => {
-  const result = verify({ envelope: envelope({ chainId: 8453 }) });
+  const result = verify({ envelope: envelope({ chainId: 50311 }) });
   assert.equal(result.ok, false);
   assert.equal(result.reason, "forbidden");
 });

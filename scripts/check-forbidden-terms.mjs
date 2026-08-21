@@ -1,12 +1,13 @@
 /**
- * Migration guardrail: fail when the retired chain id or endpoint is added
- * back to source files.
+ * Migration guardrail: fail when a non-Shannon EVM network identifier is
+ * added to source files.
  */
 import { readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 
 const FORBIDDEN = [
-  ["retired chain id", /\b84532\b/],
+  ["unapproved EVM chain id", /\b(?:chainId|chain_id)\s*[:=]\s*(?!5031[12]\b)\d+\b/],
+  ["unapproved CAIP-2 network", /\beip155:(?!50312\b)\d+\b/],
 ];
 
 const files = execSync("git ls-files", { encoding: "utf8" })

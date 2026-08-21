@@ -120,7 +120,7 @@ test("an expired challenge is refused", () => {
 test("a challenge for another chain is refused", () => {
   // Otherwise a mainnet signature would register a testnet agent.
   const verdict = verifyChallenge({
-    challenge: challenge({ chainId: 8453 }),
+    challenge: challenge({ chainId: 50311 }),
     recoveredWallet: OPERATOR,
     expectedChainId: CHAIN,
     usedNonces: new Set(),
