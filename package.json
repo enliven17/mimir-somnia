@@ -26,6 +26,7 @@
     "agents:distribute": "tsx --env-file-if-exists=.env.local scripts/fund-from-oracle.ts",
     "agents:funding-plan": "tsx --env-file-if-exists=.env.local scripts/fund-from-oracle.ts --dry-run",
     "agents:balances": "tsx --env-file-if-exists=.env.local scripts/check-agent-balances.ts",
+    "dreamdex:provision": "tsx --env-file-if-exists=.env.local scripts/provision-dreamdex.ts",
     "workers": "concurrently --names oracle,creator,council,sync,traders --kill-others-on-fail -c blue,magenta,green,cyan,yellow \"npm:oracle\" \"npm:market-creator\" \"npm:council\" \"npm:sync\" \"npm:traders\"",
     "demo:cycle": "tsx --env-file-if-exists=.env.local scripts/demo-full-cycle.ts",
     "seed": "npx tsx scripts/seed-claims.ts",
