@@ -116,6 +116,7 @@ const OPENROUTER_QUOTA_COOLDOWN_MS = Number(process.env.OPENROUTER_QUOTA_COOLDOW
 let anthropicClient: Anthropic | null = null;
 let openrouterCooldownUntil = 0;
 const groqCooldownByKey = new Map<string, number>();
+let groqKeyCursor = 0;
 // Keyed by `${keyFingerprint}|${model}` — rate limits are per project (key) per model.
 const geminiCooldownByCombo = new Map<string, number>();
 let geminiKeyCursor = 0;
@@ -187,12 +188,19 @@ function getGroqKeys(): string[] {
   return keys;
 }
 
+/** Rotate Groq fallback keys so the backup key also carries normal fallback traffic. */
+function rotatedGroqKeys(keys: string[]): string[] {
+  if (keys.length < 2) return keys;
+  const start = groqKeyCursor++ % keys.length;
+  return keys.slice(start).concat(keys.slice(0, start));
+}
+
 function groqKeyCooldownRemaining(key: string): number {
   return cooldownRemaining(groqCooldownByKey.get(key) ?? 0);
 }
 
 function groqCooldownRemaining(): number {
-  const keys = getGroqKeys();
+  const keys = rotatedGroqKeys(getGroqKeys());
   if (keys.length === 0) return 0;
   const ready = keys.some((key) => groqKeyCooldownRemaining(key) === 0);
   if (ready) return 0;
