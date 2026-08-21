@@ -27,6 +27,7 @@ import {
   philosopherAddressEnv,
   philosopherPrivateKeyEnv,
 } from "../agents/council/philosophers";
+import { TRADER_PERSONAS } from "../agents/traders/personas";
 
 const ENV_PATH = ".env.local";
 const WRITE = process.argv.includes("--write");
@@ -64,7 +65,7 @@ function main(): void {
   };
 
   const oracle = make("ORACLE_PRIVATE_KEY", "oracle");
-  make("CREATOR_PRIVATE_KEY", "market-creator");
+  const creator = make("CREATOR_PRIVATE_KEY", "market-creator");
   for (const persona of listCouncilPersonas()) {
     make(personaPrivateKeyEnv(persona), `council:${persona.slug}`, personaAddressEnv(persona));
   }
@@ -77,10 +78,15 @@ function main(): void {
       philosopherAddressEnv(persona.slug),
     );
   }
+  for (const persona of TRADER_PERSONAS) {
+    make(persona.keyEnv, `trader:${persona.agentId}`, persona.addressEnv);
+  }
 
   // Address block for the web server: default payment recipient = oracle.
   const addressLines = [
     `SELLER_ADDRESS=${oracle.address}`,
+    `ORACLE_ADDRESS=${oracle.address}`,
+    `CREATOR_ADDRESS=${creator.address}`,
     ...entries
       .filter((e) => e.addressEnv)
       .map((e) => `${e.addressEnv}=${e.address}`),

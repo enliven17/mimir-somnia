@@ -5,10 +5,11 @@
  * NO, and submits a bounded market buy through the official exchange SDK.
  * Private keys stay in this worker process and never enter a route or bundle.
  */
-process.env.LLM_PROVIDER = "groq";
+process.env.LLM_PROVIDER = "gemini";
 
 import { createSomniaPublicClient, weiToStt } from "../../lib/chain";
 import { loadAgentWallet, type AgentWallet } from "../../lib/agent-wallets";
+import { createThrottle } from "../../lib/agent-bootstrap";
 import {
   getDreamDexPortfolio,
   loadDreamDexMarkets,
@@ -16,7 +17,7 @@ import {
   type DreamDexMarket,
 } from "../../lib/dreamdex-market";
 import { DREAMDEX_NETWORK } from "../../lib/dreamdex";
-import { callLLM, activeLLMModel, activeLLMProvider, extractJson } from "../../lib/llm";
+import { callLLM, activeLLMModel, activeLLMProvider, extractJson, pickGeminiModel } from "../../lib/llm";
 import { reportingPoll } from "../../lib/ops/heartbeat";
 import { AUTHORITY_LEVELS, defaultLimits, REGISTRY_SCHEMA_VERSION, type AgentRecord } from "../../lib/agents/registry";
 import { loadAgent, saveAgent } from "../../lib/agents/store";
@@ -26,6 +27,8 @@ const POLL_INTERVAL_MS = Number(process.env.TRADER_POLL_INTERVAL_MS ?? "900000")
 const MAX_TRADES_PER_CYCLE = Number(process.env.TRADER_MAX_STAKES_PER_CYCLE ?? "1");
 const DRY_RUN = process.env.TRADER_DRY_RUN === "1";
 const MIN_GAS_STT = 0.0008;
+const LLM_THROTTLE_MS = Number(process.env.TRADER_LLM_THROTTLE_MS ?? "8000");
+const llmGate = createThrottle(LLM_THROTTLE_MS);
 
 interface Decision {
   verdict: TraderVerdict;
@@ -101,10 +104,12 @@ Reply with JSON only:
 }
 
 async function decide(persona: TraderPersona, market: DreamDexMarket): Promise<Decision> {
+  await llmGate();
   const text = await callLLM(decisionPrompt(persona, market), {
     maxTokens: 400,
     jsonOnly: true,
     temperature: 0.3,
+    model: pickGeminiModel(persona.agentId),
   });
   try {
     const parsed = JSON.parse(extractJson(text) ?? "{}") as Partial<Decision>;

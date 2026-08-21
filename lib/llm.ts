@@ -5,7 +5,8 @@
  * configured API keys. The active provider can be forced with:
  *   LLM_PROVIDER=gemini|anthropic|groq|openrouter
  *
- * Each provider uses its own default model unless ORACLE_LLM_MODEL is set.
+ * Each provider uses its own default model unless its provider-specific model
+ * variable is set (for example GEMINI_DEFAULT_MODEL or ANTHROPIC_MODEL).
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -27,7 +28,7 @@ export interface CallLLMOptions {
    */
   jsonSchema?: Record<string, unknown>;
   /**
-   * Preferred Gemini model for this call (e.g. "gemma-4-26b-it"). Used to spread
+   * Preferred Gemini model for this call (e.g. "gemini-3.7-flash"). Used to spread
    * agent load across models so each gets its own rate-limit bucket. Ignored by
    * non-Gemini providers. Falls back to the rest of the pool if this model is
    * rate-limited. Pick a stable one per agent with `pickGeminiModel(seed)`.
@@ -35,7 +36,7 @@ export interface CallLLMOptions {
   model?: string;
 }
 
-const DEFAULT_GEMINI_MODEL = process.env.ORACLE_LLM_MODEL || "gemini-2.5-flash";
+const DEFAULT_GEMINI_MODEL = process.env.GEMINI_DEFAULT_MODEL || "gemini-3.7-flash";
 
 /**
  * Gemini model pool for load-spreading. Free-tier limits are per-model, so
@@ -104,7 +105,7 @@ export function pickGeminiModel(seed: string): string {
   for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
   return pool[hash % pool.length];
 }
-const DEFAULT_ANTHROPIC_MODEL = process.env.ORACLE_LLM_MODEL || "claude-sonnet-4-6";
+const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 const DEFAULT_GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
 const DEFAULT_OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "openrouter/free";
 
@@ -461,7 +462,12 @@ async function callGeminiModel(
   // Some text models expose generateContent and structured output but reject
   // thinkingBudget entirely. Keep them in the quota-spreading pool without
   // sending a capability they do not advertise.
-  const rejectsThinkingConfig = new Set(["gemini-3.5-flash-lite", "gemini-3.6-flash"]);
+  const rejectsThinkingConfig = new Set([
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+  ]);
   if (!isGemma && !rejectsThinkingConfig.has(model)) {
     generationConfig.thinkingConfig = { thinkingBudget: 0 };
   }

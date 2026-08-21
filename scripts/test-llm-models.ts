@@ -9,7 +9,7 @@
  */
 
 const CANDIDATE_MODELS = (process.env.MODELS ??
-  "gemma-4-26b-it,gemma-4-31b-it,gemma-3-27b-it,gemini-2.5-flash,gemini-3.1-flash-lite,gemini-3.5-flash")
+  "gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite")
   .split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
 
 const KEYS: Array<{ source: string; key?: string }> = [
@@ -22,7 +22,12 @@ const KEYS: Array<{ source: string; key?: string }> = [
 async function probe(apiKey: string, model: string): Promise<string> {
   const isGemma = model.toLowerCase().startsWith("gemma");
   const generationConfig: Record<string, unknown> = { temperature: 0, maxOutputTokens: 16 };
-  const rejectsThinkingConfig = new Set(["gemini-3.5-flash-lite", "gemini-3.6-flash"]);
+  const rejectsThinkingConfig = new Set([
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+  ]);
   if (!isGemma && !rejectsThinkingConfig.has(model)) {
     generationConfig.thinkingConfig = { thinkingBudget: 0 };
   }

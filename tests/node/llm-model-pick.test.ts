@@ -11,7 +11,7 @@ async function pick(seed: string, models: string): Promise<string> {
   return pickGeminiModel(seed);
 }
 
-const MIXED = "gemini-3.1-flash-lite,gemma-4-31b-it,gemini-3.5-flash,gemma-4-26b-a4b-it";
+const MIXED = "gemini-3.1-flash-lite,gemma-3-27b-it,gemini-3.6-flash,gemma-3-12b-it";
 
 test("no agent is ever assigned a Gemma model", async () => {
   // Gemma reasons in prose before the JSON, which silently starves the strict-JSON
@@ -32,6 +32,6 @@ test("assignment is stable and spreads across the usable pool", async () => {
 });
 
 test("a Gemma-only pool falls back instead of returning undefined", async () => {
-  const model = await pick("oracle", "gemma-4-31b-it,gemma-4-26b-a4b-it");
+  const model = await pick("oracle", "gemma-3-27b-it,gemma-3-12b-it");
   assert.ok(model && !model.startsWith("gemma"), `got ${String(model)}`);
 });
