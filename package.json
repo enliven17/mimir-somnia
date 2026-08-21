@@ -21,6 +21,7 @@
     "sync": "tsx --env-file-if-exists=.env.local agents/sync/index.ts",
     "traders": "tsx --env-file-if-exists=.env.local agents/traders/index.ts",
     "agents:create-wallets": "tsx scripts/create-agent-wallets.ts --write",
+    "agents:faucet": "tsx --env-file-if-exists=.env.local scripts/faucet-and-distribute.ts",
     "agents:fund": "tsx --env-file-if-exists=.env.local scripts/fund-agents.ts",
     "agents:distribute": "tsx --env-file-if-exists=.env.local scripts/fund-from-oracle.ts",
     "agents:funding-plan": "tsx --env-file-if-exists=.env.local scripts/fund-from-oracle.ts --dry-run",
