@@ -20,7 +20,7 @@ export interface PaymentEvent {
   /** Which endpoint earned it (e.g. /api/premium/price). */
   resource: string;
   scheme: string;
-  /** CAIP-2, e.g. eip155:84532. */
+  /** CAIP-2, e.g. eip155:50312. */
   network: string;
   assetAddress: string;
   /** Settled amount in atomic token units. */

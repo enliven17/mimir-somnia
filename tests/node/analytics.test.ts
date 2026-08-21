@@ -31,7 +31,7 @@ const OTHER = "0x2222222222222222222222222222222222222222";
 test("the envelope is stamped with version and chain on every event", () => {
   const envelope = buildEnvelope({ actor_type: "human", source_surface: "explorer" });
   assert.equal(envelope.event_version, EVENT_VERSION);
-  assert.equal(envelope.chain_id, 84532);
+  assert.equal(envelope.chain_id, 50312);
   assert.equal(hasRequiredEnvelope(envelope as unknown as Record<string, unknown>), true);
 });
 
@@ -72,7 +72,7 @@ test("the envelope carries mode and claim context when supplied", () => {
 });
 
 test("an incomplete envelope is detectable rather than shipped", () => {
-  assert.equal(hasRequiredEnvelope({ chain_id: 84532, actor_type: "human" }), false);
+  assert.equal(hasRequiredEnvelope({ chain_id: 50312, actor_type: "human" }), false);
   assert.equal(hasRequiredEnvelope({ event_version: 1, actor_type: "human" }), false);
 });
 

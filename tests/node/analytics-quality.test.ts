@@ -4,8 +4,8 @@ import { evaluateAnalyticsQuality, type ExportedAnalyticsEvent } from "../../lib
 
 function row(event: string, complete = true): ExportedAnalyticsEvent {
   return { event, properties: complete
-    ? { event_version: 1, chain_id: 84532, settlement_mode: "pool", is_internal: false }
-    : { event_version: 1, chain_id: 84532, is_internal: false } };
+    ? { event_version: 1, chain_id: 50312, settlement_mode: "pool", is_internal: false }
+    : { event_version: 1, chain_id: 50312, is_internal: false } };
 }
 
 test("the KPI gate accepts measurable funnels at 99 percent completeness", () => {

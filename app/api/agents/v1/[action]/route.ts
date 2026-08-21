@@ -307,7 +307,7 @@ export async function POST(req: Request, context: { params: Promise<{ action: st
       ? { disposition: "review", proposal: body, moderationRequired: true }
       : {
           allowed: true, simulated: false, contract: getContractAddress(),
-          chainId: 84532, requiresExternalWalletSignature: true,
+          chainId: 50312, requiresExternalWalletSignature: true,
           contractConfigured: isContractConfigured(),
           // The contract freezes the fee recipient onto the claim at creation, so a
           // market opened with the zero address can never pay this agent's owner —

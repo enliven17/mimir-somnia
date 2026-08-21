@@ -22,7 +22,7 @@ import {
 const OWNER = "0xAAaaAAaaAAaaAAaaAAaaAAaaAAaaAAaaAAaaAAaa";
 const OPERATOR = "0xBBbbBBbbBBbbBBbbBBbbBBbbBBbbBBbbBBbbBBbb";
 const STRANGER = "0xCCccCCccCCccCCccCCccCCccCCccCCccCCccCCcc";
-const CHAIN = 84532;
+const CHAIN = 50312;
 const NOW = 1_780_000_000_000;
 
 function agent(overrides: Partial<AgentRecord> = {}): AgentRecord {
@@ -63,7 +63,7 @@ function challenge(overrides: Partial<RegistrationChallenge> = {}): Registration
 test("the signed message is domain-bound, nonce'd and expiring", () => {
   const message = buildChallengeMessage(challenge());
   assert.match(message, /Mimir agent registration/);
-  assert.match(message, /chainId: 84532/);
+  assert.match(message, /chainId: 50312/);
   assert.match(message, /nonce: n-1/);
   assert.match(message, /expiresAt: /);
   // The signer may be a hardware wallet; the owner must be able to read that

@@ -23,7 +23,7 @@ import {
 
 const OPERATOR = "0xBBbbBBbbBBbbBBbbBBbbBBbbBBbbBBbbBBbbBBbb";
 const OTHER = "0xCCccCCccCCccCCccCCccCCccCCccCCccCCccCCcc";
-const CHAIN = 84532;
+const CHAIN = 50312;
 const NOW = 1_780_000_000_000;
 const BODY = '{"claimId":12,"stakeUsdc":5}';
 

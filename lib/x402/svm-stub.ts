@@ -12,7 +12,7 @@
 
 function unsupported(): never {
   throw new Error(
-    "Solana x402 is not supported: Mimir settles on Somnia Shannon testnet (eip155:84532) only.",
+    "Solana x402 is not supported: Mimir settles on Somnia Shannon testnet (eip155:50312) only.",
   );
 }
 
