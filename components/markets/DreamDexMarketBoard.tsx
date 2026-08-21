@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWalletClient } from "wagmi";
 import { createExchange } from "@/lib/dreamdex";
 import type { SomniaMarkets } from "@somnia-chain/markets-sdk";
-import type { DreamDexMarket, DreamDexOrderBook } from "@/lib/dreamdex-market";
+import type { DreamDexMarket, DreamDexOrderBook, DreamDexPortfolio } from "@/lib/dreamdex-market";
 import { useWallet } from "@/lib/wallet";
 
 type OrderSide = "buy" | "sell";
@@ -36,6 +36,7 @@ export default function DreamDexMarketBoard() {
   const [selectedId, setSelectedId] = useState("");
   const [outcome, setOutcome] = useState<"YES" | "NO">("YES");
   const [book, setBook] = useState<DreamDexOrderBook | null>(null);
+  const [portfolio, setPortfolio] = useState<DreamDexPortfolio | null>(null);
   const [side, setSide] = useState<OrderSide>("buy");
   const [type, setType] = useState<"limit" | "market">("limit");
   const [amount, setAmount] = useState("1");
@@ -75,6 +76,13 @@ export default function DreamDexMarketBoard() {
     }
   }, []);
 
+  const loadPortfolio = useCallback(async (walletAddress: string) => {
+    const response = await fetch(`/api/portfolio/${walletAddress}`, { cache: "no-store" });
+    if (!response.ok) throw new Error("Portfolio unavailable");
+    const payload = await response.json() as { item?: DreamDexPortfolio };
+    setPortfolio(payload.item ?? null);
+  }, []);
+
   useEffect(() => {
     void loadMarkets().catch((error) => setNotice(error instanceof Error ? error.message : "Market list unavailable"));
   }, [loadMarkets]);
@@ -82,6 +90,14 @@ export default function DreamDexMarketBoard() {
   useEffect(() => {
     void loadBook(selectedId, outcome);
   }, [loadBook, selectedId, outcome]);
+
+  useEffect(() => {
+    if (!address) {
+      setPortfolio(null);
+      return;
+    }
+    void loadPortfolio(address).catch(() => setPortfolio(null));
+  }, [address, loadPortfolio]);
 
   useEffect(() => {
     if (!exchangeRef.current) exchangeRef.current = createExchange();
@@ -142,6 +158,7 @@ export default function DreamDexMarketBoard() {
       const hash = actionHash(result);
       setNotice(hash ? `Confirmed: ${hash}` : "Transaction confirmed.");
       await loadBook(selected.id, outcome);
+      if (address) await loadPortfolio(address);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Transaction failed");
     } finally {
@@ -244,6 +261,19 @@ export default function DreamDexMarketBoard() {
           ) : <div className="rounded-2xl border border-dashed border-pv-border/50 p-8 text-sm text-pv-muted">Select a market to inspect its book.</div>}
         </section>
       </div>
+
+      {address ? (
+        <section className="rounded-2xl border border-pv-border/40 bg-pv-surface/60 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div><h2 className="font-display text-lg font-bold text-pv-text">Your DreamDEX portfolio</h2><p className="mt-1 font-mono text-[11px] text-pv-muted">{portfolio?.address ?? address}</p></div>
+            <button type="button" onClick={() => void loadPortfolio(address)} className="btn-compact-secondary text-[11px]">Refresh portfolio</button>
+          </div>
+          <div className="mt-4 grid gap-4 lg:grid-cols-[0.8fr_1.2fr]">
+            <div><p className="mb-2 text-xs text-pv-muted">Balances</p><div className="flex flex-wrap gap-2">{portfolio?.balances.filter((balance) => balance.total > 0).slice(0, 12).map((balance) => <span key={balance.code} className="rounded-lg border border-pv-border/30 px-2.5 py-1.5 font-mono text-[11px] text-pv-text">{balance.code}: {balance.total.toFixed(4)}</span>)}{!portfolio?.balances.some((balance) => balance.total > 0) ? <span className="text-xs text-pv-muted">No indexed balances yet.</span> : null}</div></div>
+            <div><p className="mb-2 text-xs text-pv-muted">Recent orders</p><div className="space-y-1.5">{portfolio?.orders.slice(0, 5).map((order) => <div key={`${order.id}-${order.timestamp ?? 0}`} className="flex flex-wrap justify-between gap-2 rounded-lg border border-pv-border/20 px-3 py-2 font-mono text-[11px] text-pv-text"><span>{order.side} {order.outcome ?? "—"} · {order.market}</span><span className="text-pv-muted">{order.status} · {order.amount.toFixed(4)}</span></div>)}{!portfolio?.orders.length ? <span className="text-xs text-pv-muted">No orders indexed yet.</span> : null}</div></div>
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }
