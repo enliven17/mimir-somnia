@@ -1,0 +1,304 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  ANALYTICS_EVENTS,
+  EVENT_VERSION,
+  buildEnvelope,
+  hasRequiredEnvelope,
+  isAnalyticsEvent,
+} from "../../lib/analytics/events";
+import { containsRawAddress, redactProperties } from "../../lib/analytics/redact";
+import {
+  ANON_ACTOR_ID,
+  actorIdForAddress,
+  resolveActor,
+} from "../../lib/analytics/actor";
+import { idempotencyKey } from "../../lib/analytics/events";
+import {
+  PRODUCT_DASHBOARDS,
+  PRODUCT_FUNNELS,
+  SUCCESS_METRICS,
+  analyticsDefinitionErrors,
+} from "../../lib/analytics/insights";
+
+const SALT = "test-salt-not-the-real-one";
+const ADDRESS = "0x1111111111111111111111111111111111111111";
+const OTHER = "0x2222222222222222222222222222222222222222";
+
+// ── Envelope ──────────────────────────────────────────────────────────────────
+
+test("the envelope is stamped with version and chain on every event", () => {
+  const envelope = buildEnvelope({ actor_type: "human", source_surface: "explorer" });
+  assert.equal(envelope.event_version, EVENT_VERSION);
+  assert.equal(envelope.chain_id, 84532);
+  assert.equal(hasRequiredEnvelope(envelope as unknown as Record<string, unknown>), true);
+});
+
+test("absent envelope fields are omitted, not sent as null", () => {
+  // Null-valued properties make PostHog filters noisy and imply "measured as
+  // nothing" rather than "not applicable".
+  const envelope = buildEnvelope({ actor_type: "anonymous", source_surface: "home" });
+  assert.equal("claim_id" in envelope, false);
+  assert.equal("settlement_mode" in envelope, false);
+  assert.equal("modifiers" in envelope, false);
+  assert.equal("agent_id" in envelope, false);
+});
+
+test("an empty modifier list is omitted rather than sent as []", () => {
+  const envelope = buildEnvelope({
+    actor_type: "human",
+    source_surface: "vs_detail",
+    modifiers: [],
+  });
+  assert.equal("modifiers" in envelope, false);
+});
+
+test("the envelope carries mode and claim context when supplied", () => {
+  const envelope = buildEnvelope({
+    actor_type: "human",
+    source_surface: "vs_detail",
+    claim_id: 12,
+    subject_type: "binary",
+    settlement_mode: "duel",
+    modifiers: ["rematch_ladder"],
+    tx_status: "confirmed",
+    locale: "en",
+  });
+  assert.equal(envelope.claim_id, 12);
+  assert.equal(envelope.settlement_mode, "duel");
+  assert.deepEqual(envelope.modifiers, ["rematch_ladder"]);
+  assert.equal(envelope.tx_status, "confirmed");
+});
+
+test("an incomplete envelope is detectable rather than shipped", () => {
+  assert.equal(hasRequiredEnvelope({ chain_id: 84532, actor_type: "human" }), false);
+  assert.equal(hasRequiredEnvelope({ event_version: 1, actor_type: "human" }), false);
+});
+
+test("only declared event names are accepted", () => {
+  assert.equal(isAnalyticsEvent("stake_confirmed"), true);
+  assert.equal(isAnalyticsEvent("stake_confirmed_v2"), false);
+  assert.equal(isAnalyticsEvent("arbitrary_thing"), false);
+});
+
+test("the roadmap's funnel events all exist", () => {
+  for (const required of [
+    "market_viewed",
+    "create_started",
+    "create_mode_selected",
+    "create_submitted",
+    "create_confirmed",
+    "stake_previewed",
+    "stake_started",
+    "stake_confirmed",
+    "stake_failed",
+    "settlement_return_viewed",
+    "payout_preview_seen",
+    "low_upside_warning_seen",
+    "agent_viewed",
+    "agent_followed",
+    "agent_unfollowed",
+    "reasoning_opened",
+    "reasoning_x402_purchased",
+    "share_card_generated",
+    "share_card_clicked",
+    "rematch_started",
+    "rematch_confirmed",
+    "copy_permission_created",
+    "copy_executed",
+    "copy_skipped",
+    "copy_revoked",
+  ]) {
+    assert.ok(
+      (ANALYTICS_EVENTS as readonly string[]).includes(required),
+      `missing funnel event '${required}'`,
+    );
+  }
+});
+
+test("all roadmap funnels and dashboards are reproducible from code", () => {
+  assert.deepEqual(analyticsDefinitionErrors(), []);
+  assert.deepEqual(
+    PRODUCT_FUNNELS.map((funnel) => funnel.id),
+    ["create", "stake", "settlement-return", "follow-to-copy", "share-to-market"],
+  );
+  assert.deepEqual(
+    PRODUCT_DASHBOARDS.flatMap((dashboard) => dashboard.breakdowns).filter(
+      (value, index, all) => all.indexOf(value) === index,
+    ),
+    ["settlement_mode", "category", "actor_type"],
+  );
+  assert.ok(PRODUCT_FUNNELS.every((funnel) => funnel.excludeInternal));
+});
+
+// ── Leak guard: the reason this module exists ─────────────────────────────────
+
+test("secret-looking KEYS are dropped whatever the value", () => {
+  const { properties, dropped } = redactProperties({
+    private_key: "anything",
+    privateKey: "anything",
+    signature: "0xdead",
+    invite_key: "hunter2",
+    prompt: "You are Mimir…",
+    evidence_text: "short",
+    reasoning_text: "short",
+    api_key: "k",
+    password: "p",
+    payment_signature: "s",
+    claim_id: 12,
+  });
+  assert.deepEqual(properties, { claim_id: 12 });
+  assert.ok(dropped.length >= 10);
+});
+
+test("a 32-byte hex value is dropped even under an innocent key", () => {
+  const { properties } = redactProperties({
+    note: "0x" + "ab".repeat(32),
+    claim_id: 3,
+  });
+  assert.equal("note" in properties, false);
+  assert.equal(properties.claim_id, 3);
+});
+
+test("a 65-byte signature is dropped even under an innocent key", () => {
+  const { properties } = redactProperties({ blob: "0x" + "cd".repeat(65) });
+  assert.equal("blob" in properties, false);
+});
+
+test("a JWT-shaped token is dropped", () => {
+  const { properties } = redactProperties({
+    council_pass: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+  });
+  assert.deepEqual(properties, {});
+});
+
+test("long free text is dropped, never truncated", () => {
+  // A truncated prompt or evidence excerpt is still a leak.
+  const { properties } = redactProperties({ blurb: "e".repeat(500) });
+  assert.equal("blurb" in properties, false);
+});
+
+test("redaction walks nested objects", () => {
+  const { properties, dropped } = redactProperties({
+    context: { invite_key: "secret", claim_id: 5 },
+  });
+  assert.deepEqual(properties, { context: { claim_id: 5 } });
+  assert.deepEqual(dropped, ["context.invite_key"]);
+});
+
+test("secret array members are removed and the array is flagged", () => {
+  const { properties, dropped } = redactProperties({
+    hashes: ["ok", "0x" + "11".repeat(32)],
+  });
+  assert.deepEqual(properties.hashes, ["ok"]);
+  assert.deepEqual(dropped, ["hashes"]);
+});
+
+test("ordinary categorical properties survive untouched", () => {
+  const input = {
+    settlement_mode: "pool",
+    stake_bucket: "2-10",
+    upside_bps: 1_000,
+    is_low_upside: true,
+    modifiers: ["underdog_boost"],
+  };
+  assert.deepEqual(redactProperties(input).properties, input);
+});
+
+test("a raw wallet address in the payload is detectable", () => {
+  assert.equal(containsRawAddress({ payer: ADDRESS }), true);
+  assert.equal(containsRawAddress({ nested: { seller: ADDRESS } }), true);
+  assert.equal(containsRawAddress({ list: [ADDRESS] }), true);
+  assert.equal(containsRawAddress({ claim_id: 1, settlement_mode: "pool" }), false);
+});
+
+test("the contract address is public context, not a user identity", () => {
+  assert.equal(containsRawAddress({ contract: ADDRESS }), false);
+});
+
+// ── Actor identity ────────────────────────────────────────────────────────────
+
+test("the actor id is stable for the same address and salt", () => {
+  const first = actorIdForAddress(ADDRESS, SALT);
+  const second = actorIdForAddress(ADDRESS.toUpperCase(), SALT);
+  assert.equal(first, second, "case must not change identity");
+  assert.equal(first!.length, 32);
+});
+
+test("different addresses get different actor ids", () => {
+  assert.notEqual(actorIdForAddress(ADDRESS, SALT), actorIdForAddress(OTHER, SALT));
+});
+
+test("rotating the salt severs the link to the old id", () => {
+  assert.notEqual(actorIdForAddress(ADDRESS, SALT), actorIdForAddress(ADDRESS, "rotated"));
+});
+
+test("the actor id never contains the address", () => {
+  const id = actorIdForAddress(ADDRESS, SALT)!;
+  assert.equal(id.includes(ADDRESS.slice(2).toLowerCase()), false);
+  assert.equal(containsRawAddress({ distinct_id: id }), false);
+});
+
+test("a malformed address yields no actor id", () => {
+  assert.equal(actorIdForAddress("not-an-address", SALT), null);
+  assert.equal(actorIdForAddress("0x1234", SALT), null);
+  assert.equal(actorIdForAddress("", SALT), null);
+});
+
+test("without a salt the actor degrades to anonymous, never to a raw address", () => {
+  assert.equal(actorIdForAddress(ADDRESS, null), null);
+  const actor = resolveActor({ address: ADDRESS, salt: null });
+  assert.equal(actor.actorId, ANON_ACTOR_ID);
+  assert.equal(actor.actorType, "anonymous");
+  assert.equal(actor.degraded, true, "a misconfigured salt must be visible in the data");
+});
+
+test("no address means anonymous, and that is not a degraded state", () => {
+  const actor = resolveActor({ salt: SALT });
+  assert.equal(actor.actorId, ANON_ACTOR_ID);
+  assert.equal(actor.actorType, "anonymous");
+  assert.equal(actor.degraded, false);
+});
+
+test("humans and agents are separable so agent traffic cannot skew conversion", () => {
+  const human = resolveActor({ address: ADDRESS, salt: SALT });
+  const agent = resolveActor({ isAgent: true, agentId: "oracle", address: ADDRESS, salt: SALT });
+  assert.equal(human.actorType, "human");
+  assert.equal(agent.actorType, "agent");
+  assert.equal(agent.actorId, "agent:oracle");
+  assert.notEqual(human.actorId, agent.actorId);
+});
+
+test("an agent id is used verbatim and is not a wallet address", () => {
+  const agent = resolveActor({ isAgent: true, agentId: "council-socrates" });
+  assert.equal(containsRawAddress({ distinct_id: agent.actorId }), false);
+});
+
+// ── Idempotency ───────────────────────────────────────────────────────────────
+
+test("the idempotency key is deterministic for the same logical step", () => {
+  assert.equal(
+    idempotencyKey(["stake_confirmed", 12, "0xabc"]),
+    idempotencyKey(["stake_confirmed", 12, "0xabc"]),
+  );
+});
+
+test("the idempotency key distinguishes different steps", () => {
+  assert.notEqual(
+    idempotencyKey(["stake_confirmed", 12]),
+    idempotencyKey(["stake_confirmed", 13]),
+  );
+});
+
+test("undefined and empty parts are skipped so the key stays stable", () => {
+  assert.equal(idempotencyKey(["a", undefined, "b"]), "a:b");
+  assert.equal(idempotencyKey(["a", "", "b"]), "a:b");
+});
+test("every roadmap success metric has an owned, non-financial-analytics source", () => {
+  assert.equal(SUCCESS_METRICS.length, 11);
+  assert.deepEqual(analyticsDefinitionErrors(), []);
+  for (const metric of SUCCESS_METRICS) {
+    if (/revenue|pnl/i.test(metric.name)) assert.notEqual(metric.source, "posthog");
+  }
+});

@@ -53,11 +53,11 @@ on-chain order books, escrow and settlement belong to the DreamDEX protocol.
 
 | File | Action |
 | ---- | ------ |
-| `lib/base.ts` | Retire; code moves to `lib/somnia.ts` once imports are moved |
+| `lib/chain.ts` | Retire; code moves to `lib/somnia.ts` once imports are moved |
 | `lib/usdc.ts` | Rewrite as generic collateral helpers (6-dec testnet / 18-dec mainnet via `NEXT_PUBLIC_COLLATERAL_ADDRESS`) |
 | `lib/contract.ts` + `lib/mimir-abi.ts` + `lib/claim-codec.ts` | Retire once every caller reads markets through `lib/dreamdex.ts` / SDK |
 | `contracts/*`, `deploy/*`, `scripts/verify-deployment.ts`, `scripts/onchain-smoke.ts`, `scripts/seed-*.ts` | Drop the deploy/verify workflow; rework into faucet + mint + order seeds against the market books |
-| `lib/wagmi-config.ts`, `lib/wagmi-providers.tsx`, `lib/wallet-connectors.ts`, `lib/base-subaccount.ts` | Drop the smart-wallet connector/sub-account path (not available on this chain); chains: `[somniaShannon]` |
+| `lib/wagmi-config.ts`, `lib/wagmi-providers.tsx`, `lib/wallet-connectors.ts`, `lib/chain-subaccount.ts` | Drop the smart-wallet connector/sub-account path (not available on this chain); chains: `[somniaShannon]` |
 | `lib/x402/config.ts` | `X402_NETWORK = eip155:50312`; asset = Somnia collateral; same facilitator flow |
 | `agents/oracle`, `agents/market-creator`, `agents/council`, `agents/traders` | Market reads/writes through `lib/dreamdex.ts`; no more self-hosted ABI writes |
 | `docs/AGENTS.md`, `docs/AGENT_PROMPT.md`, `README.md`, `TODO.md` | Rewrite the chain/payout wiring prose |
@@ -66,8 +66,8 @@ on-chain order books, escrow and settlement belong to the DreamDEX protocol.
 
 `SOMNIA_RPC_URL` / `NEXT_PUBLIC_SOMNIA_RPC_URL`, `SOMNIA_WS_URL`,
 `DREAMDEX_INDEXER_URL`, `NEXT_PUBLIC_COLLATERAL_ADDRESS` /
-`COLLATERAL_ADDRESS`, `X402_NETWORK=eip155:50312`. The old `BASE_*` /
-`NEXT_PUBLIC_USDC_ADDRESS` keys are retired.
+`COLLATERAL_ADDRESS`, `X402_NETWORK=eip155:50312`. The old chain-specific
+environment keys are retired.
 ## Sequence
 
 ### P0 — Foundation (this branch)
