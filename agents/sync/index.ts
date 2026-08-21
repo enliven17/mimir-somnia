@@ -15,6 +15,7 @@
  */
 
 import { reportingPoll } from "../../lib/ops/heartbeat";
+import { loadDreamDexMarkets } from "../../lib/dreamdex-market";
 import { reconcileSettlements } from "../../lib/server/settlement-index";
 import { reconcileVsIndex } from "../../lib/server/vs-index";
 
@@ -23,6 +24,12 @@ import { reconcileVsIndex } from "../../lib/server/vs-index";
 const POLL_INTERVAL_MS = Number(process.env.SYNC_POLL_INTERVAL_MS ?? "300000");
 
 async function poll(): Promise<void> {
+  const dreamdexMarkets = await loadDreamDexMarkets({ includeInactive: true, reload: true });
+  console.log(
+    `[sync] DreamDEX registry: ${dreamdexMarkets.length} binary market(s), ` +
+      `${dreamdexMarkets.filter((market) => market.status === "Trading").length} trading`,
+  );
+
   const summary = await reconcileVsIndex();
   console.log(
     `[sync] ── Reconciled at ${new Date().toISOString()} — ` +

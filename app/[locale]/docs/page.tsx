@@ -1,9 +1,7 @@
-import { getContractAddress, getExplorerAddressUrl } from "@/lib/chain";
+import { getExplorerAddressUrl } from "@/lib/chain";
+import { DREAMDEX_ADDRESSES, DREAMDEX_NETWORK } from "@/lib/dreamdex";
 
 export default function DocsPage() {
-  const contract = getContractAddress();
-  const contractConfigured = contract !== "0x0000000000000000000000000000000000000000";
-
   return (
     <main className="mx-auto max-w-4xl px-6 py-16 text-pv-text">
       <p className="font-mono text-xs uppercase tracking-[0.2em] text-pv-emerald">MIMIR / DOCS</p>
@@ -19,7 +17,7 @@ export default function DocsPage() {
           <h2 className="font-display text-xl font-semibold">Network</h2>
           <dl className="mt-4 space-y-2 font-mono text-sm text-pv-muted">
             <div className="flex justify-between gap-4"><dt>Chain</dt><dd>Somnia Shannon</dd></div>
-            <div className="flex justify-between gap-4"><dt>Chain ID</dt><dd>50312</dd></div>
+            <div className="flex justify-between gap-4"><dt>Chain ID</dt><dd>{DREAMDEX_NETWORK.replace("eip155:", "")}</dd></div>
             <div className="flex justify-between gap-4"><dt>Gas</dt><dd>STT</dd></div>
             <div className="flex justify-between gap-4"><dt>Venue</dt><dd>DreamDEX</dd></div>
           </dl>
@@ -42,14 +40,20 @@ X402_NETWORK=eip155:50312`}</pre>
       </section>
 
       <section className="mt-10 border border-pv-border/40 bg-pv-surface p-5">
-        <h2 className="font-display text-xl font-semibold">Explorer</h2>
-        {contractConfigured ? (
-          <a className="mt-3 inline-block text-pv-emerald underline" href={getExplorerAddressUrl(contract)}>
-            View configured contract
-          </a>
-        ) : (
-          <p className="mt-3 text-sm text-pv-muted">Set the contract address when a deployment is available.</p>
-        )}
+        <h2 className="font-display text-xl font-semibold">Protocol addresses</h2>
+        <div className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
+          {Object.entries({
+            Collateral: DREAMDEX_ADDRESSES.collateral,
+            BinaryModule: DREAMDEX_ADDRESSES.binaryModule,
+            MarketCreator: DREAMDEX_ADDRESSES.marketCreator,
+          }).map(([label, address]) => (
+            <a key={label} className="rounded border border-pv-border/30 p-3 text-pv-muted hover:border-pv-emerald/40" href={getExplorerAddressUrl(address)} target="_blank" rel="noreferrer">
+              <span className="block font-semibold text-pv-text">{label}</span>
+              <span className="mt-1 block break-all font-mono">{address}</span>
+            </a>
+          ))}
+        </div>
+        <a className="mt-5 inline-block btn-compact-primary px-4 py-2 text-sm" href="/markets">Open Markets</a>
       </section>
     </main>
   );

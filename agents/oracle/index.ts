@@ -45,6 +45,8 @@ import {
   agentContractWrite,
   getOracleWallet,
 } from "../../lib/agent-wallets";
+import { loadDreamDexMarkets, withDreamDexSigner } from "../../lib/dreamdex-market";
+import { DREAMDEX_NETWORK } from "../../lib/dreamdex";
 import { fetchWithBudget, payingWalletFor } from "../../lib/x402/buyer";
 import { MIMIR_ABI, WINNER_SIDE, STATE, BPS_DIVISOR } from "../../lib/mimir-abi";
 import { reportingPoll } from "../../lib/ops/heartbeat";
@@ -627,7 +629,7 @@ async function challengeIfMispriced(claim: ClaimOnChain): Promise<void> {
 }
 
 // ── Main poll loop ────────────────────────────────────────────────────────────
-async function poll(): Promise<void> {
+async function legacyPoll(): Promise<void> {
   const now = BigInt(Math.floor(Date.now() / 1000));
 
   let total: bigint;
@@ -697,12 +699,43 @@ async function poll(): Promise<void> {
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
+/**
+ * DreamDEX settlement monitor. Resolution is protocol-oracle driven, so this
+ * worker observes lifecycle changes and optionally redeems the oracle wallet's
+ * own settled outcome balance. It never fabricates a resolution transaction.
+ */
+async function poll(): Promise<void> {
+  const markets = await loadDreamDexMarkets({ includeInactive: true, reload: true });
+  const live = markets.filter((market) => market.status === "Trading" || market.status === "Locked" || market.status === "Settling");
+  const resolved = markets.filter((market) => market.status === "Resolved" || market.status === "Voided" || market.status === "Finalized");
+  console.log(`\n[oracle] DreamDEX poll ${new Date().toISOString()} · live=${live.length} resolved=${resolved.length}`);
+
+  if (process.env.AUTO_REDEEM !== "1" || resolved.length === 0) return;
+  const key = process.env.ORACLE_PRIVATE_KEY?.trim();
+  if (!key || !/^0x[0-9a-fA-F]{64}$/.test(key)) return;
+
+  await withDreamDexSigner(key as `0x${string}`, async (exchange) => {
+    const balances = await exchange.fetchBalance();
+    for (const market of resolved) {
+      const outcome = market.winningOutcome === 1 ? market.noSymbol : market.yesSymbol;
+      const amount = balances[outcome]?.total ?? 0;
+      if (amount <= 0 || (market.winningOutcome === null && !market.voided)) continue;
+      try {
+        const result = await exchange.redeem(market.symbol, amount);
+        console.log(`[oracle] redeemed ${amount.toFixed(6)} ${outcome} on ${market.symbol} · ${result.hash}`);
+      } catch (error) {
+        console.warn(`[oracle] redeem failed for ${market.symbol}:`, error instanceof Error ? error.message : error);
+      }
+    }
+  });
+}
+
 async function main(): Promise<void> {
   const balance = await publicClient.getBalance({ address: ORACLE_ADDR });
 
   console.log("═══════════════════════════════════════════════");
   console.log("  Mimir Oracle Agent (local private key signer)");
-  console.log(`  Contract   : ${CONTRACT_ADDRESS}`);
+  console.log(`  Venue      : DreamDEX (${DREAMDEX_NETWORK})`);
   console.log(`  Oracle     : ${ORACLE_ADDR}`);
   console.log(`  Balance    : ${weiToStt(balance).toFixed(4)} ETH`);
   console.log(`  Network    : Somnia Shannon testnet (${somniaShannon.id})`);
