@@ -37,6 +37,7 @@ import { guardChallenge, toCanonicalMode } from "./market-modes";
 import { checkWriteAllowed } from "./ops/flags";
 import { availableCreatorLiquidityUnits } from "./payout";
 import type { VSCacheFreshness } from "./vs-freshness";
+import { paymasterCapabilities, withPaymasterWalletClient } from "./paymaster";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 // MIN_STAKE in display USDC (matches Mimir.sol: 2 * 10^6 = 2 USDC)
@@ -580,6 +581,8 @@ async function trySendAtomicBatch(
         args: args as never,
       },
     ],
+    ...(paymasterCapabilities() ? { capabilities: paymasterCapabilities() } : {}),
+    forceAtomic: true,
   });
 
   const status = await wc.waitForCallsStatus({ id, timeout: 60_000 });
@@ -616,16 +619,17 @@ async function sendBrowserTx(
     transport: custom(ethereum),
     account,
   });
+  const sponsoredWc = withPaymasterWalletClient(wc);
 
   const stakeUnits = stakeUsdc > 0 ? usdcToUnits(stakeUsdc) : 0n;
   const needsApprove = stakeUnits > 0n && !(await hasUsdcAllowance(account, stakeUnits));
 
   if (needsApprove) {
     // One-confirmation path when the wallet can batch atomically.
-    const batched = await trySendAtomicBatch(wc, account, functionName, args);
+    const batched = await trySendAtomicBatch(sponsoredWc, account, functionName, args);
     if (batched) return batched;
     // Classic EOA: approve, then write.
-    await approveUsdc(wc, account);
+    await approveUsdc(sponsoredWc, account);
   }
 
   // Simulate against the latest chain state immediately before asking for the
@@ -646,7 +650,7 @@ async function sendBrowserTx(
     throw new Error(`Transaction can no longer be completed: ${reason}`);
   }
 
-  const txHash = await wc.writeContract({
+  const txHash = await sponsoredWc.writeContract({
     address:      CONTRACT_ADDRESS,
     abi:          MIMIR_ABI,
     functionName: functionName as any,
