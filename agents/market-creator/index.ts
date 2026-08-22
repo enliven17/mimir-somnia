@@ -811,6 +811,17 @@ async function createDreamDexMarket(candidate: ClaimCandidate): Promise<string |
     return null;
   }
 
+  // A configured MarketCreator is already a Somnia-reactive rolling series.
+  // Its first trigger arms the cadence and the precompile creates each next
+  // BTC/ETH event market at the interval boundary. Candidate text belongs in
+  // the proposal/council layer; it must not cause an extra on-chain roll for
+  // every unrelated AI candidate. Manual rolls remain available for recovery
+  // or migration by explicitly opting in.
+  if (process.env.MARKET_CREATOR_AUTONOMOUS === "1" && process.env.DREAMDEX_MANUAL_ROLL !== "1") {
+    console.log(`[market-creator] DreamDEX autonomous series ${seriesId} owns cadence; proposal kept off-chain (${candidate.category})`);
+    return null;
+  }
+
   try {
     const exchange = createExchange({ privateKey: key as `0x${string}` });
     try {
