@@ -6,7 +6,6 @@ import { createExchange } from "@/lib/dreamdex";
 import type { SomniaMarkets } from "@somnia-chain/markets-sdk";
 import type { DreamDexMarket, DreamDexOrderBook, DreamDexPortfolio } from "@/lib/dreamdex-market";
 import { useWallet } from "@/lib/wallet";
-import { withPaymasterWalletClient } from "@/lib/paymaster";
 
 type OrderSide = "buy" | "sell";
 type Action = "order" | "mint" | "burn" | "redeem";
@@ -32,10 +31,6 @@ function actionHash(value: unknown) {
 export default function DreamDexMarketBoard() {
   const { address, isConnected, connect } = useWallet();
   const { data: walletClient } = useWalletClient();
-  const sponsoredWalletClient = useMemo(
-    () => walletClient ? withPaymasterWalletClient(walletClient) : null,
-    [walletClient],
-  );
   const exchangeRef = useRef<SomniaMarkets | null>(null);
   const [markets, setMarkets] = useState<DreamDexMarket[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -106,13 +101,13 @@ export default function DreamDexMarketBoard() {
 
   useEffect(() => {
     if (!exchangeRef.current) exchangeRef.current = createExchange();
-    if (sponsoredWalletClient) {
-      exchangeRef.current.setSigner({ walletClient: sponsoredWalletClient });
+    if (walletClient) {
+      exchangeRef.current.setSigner({ walletClient });
     } else {
       exchangeRef.current.setSigner({});
     }
     return () => undefined;
-  }, [sponsoredWalletClient]);
+  }, [walletClient]);
 
   useEffect(() => () => {
     void exchangeRef.current?.close();
@@ -120,7 +115,7 @@ export default function DreamDexMarketBoard() {
 
   async function runAction(action: Action) {
     if (!selected) return;
-    if (!isConnected || !sponsoredWalletClient) {
+    if (!isConnected || !walletClient) {
       await connect();
       setNotice("Wallet connected. Confirm the action again.");
       return;
@@ -137,7 +132,7 @@ export default function DreamDexMarketBoard() {
     try {
       const exchange = exchangeRef.current ?? createExchange();
       exchangeRef.current = exchange;
-      exchange.setSigner({ walletClient: sponsoredWalletClient });
+      exchange.setSigner({ walletClient });
       await exchange.loadMarkets();
       const unified = Object.values(exchange.markets).find((item) => item.info.id.toLowerCase() === selected.id.toLowerCase());
       if (!unified) throw new Error("Selected market is no longer indexed");

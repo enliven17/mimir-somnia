@@ -22,7 +22,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WagmiProvider } from "wagmi";
 
 import { somniaShannon } from "./chain";
-import { PAYMASTER_URL } from "./paymaster";
 import { wagmiConfig } from "./wagmi-config";
 
 const queryClient = new QueryClient();
@@ -42,6 +41,8 @@ const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID?.trim();
  * CDP issues one from portal.cdp.coinbase.com. Left unset until then rather than
  * pointing at a guess: a wrong paymaster URL fails the call it was meant to help.
  */
+const PAYMASTER_URL = process.env.NEXT_PUBLIC_PAYMASTER_URL?.trim();
+
 export function isPrivyConfigured(): boolean {
   return Boolean(PRIVY_APP_ID);
 }
