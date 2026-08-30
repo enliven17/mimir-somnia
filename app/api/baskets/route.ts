@@ -22,7 +22,7 @@ import { insertBasket, listBaskets } from "@/lib/db";
 export const dynamic = "force-dynamic";
 
 /** What the creator signs. Readable, because a hardware wallet shows it verbatim. */
-export function basketMessage(args: {
+function basketMessage(args: {
   name: string; creator: string; members: Array<{ agentId: string; weightBps: number }>;
 }): string {
   return [

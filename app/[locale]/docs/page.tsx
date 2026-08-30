@@ -47,10 +47,12 @@ X402_NETWORK=eip155:50312`}</pre>
             BinaryModule: DREAMDEX_ADDRESSES.binaryModule,
             MarketCreator: DREAMDEX_ADDRESSES.marketCreator,
           }).map(([label, address]) => (
-            <a key={label} className="rounded border border-pv-border/30 p-3 text-pv-muted hover:border-pv-emerald/40" href={getExplorerAddressUrl(address)} target="_blank" rel="noreferrer">
-              <span className="block font-semibold text-pv-text">{label}</span>
-              <span className="mt-1 block break-all font-mono">{address}</span>
-            </a>
+            address ? (
+              <a key={label} className="rounded border border-pv-border/30 p-3 text-pv-muted hover:border-pv-emerald/40" href={getExplorerAddressUrl(address)} target="_blank" rel="noreferrer">
+                <span className="block font-semibold text-pv-text">{label}</span>
+                <span className="mt-1 block break-all font-mono">{address}</span>
+              </a>
+            ) : null
           ))}
         </div>
         <a className="mt-5 inline-block btn-compact-primary px-4 py-2 text-sm" href="/markets">Open Markets</a>

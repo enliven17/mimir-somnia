@@ -143,7 +143,7 @@ async function main(): Promise<void> {
     const exchange = createExchange({ privateKey: creatorKey });
     try {
       const faucetTx = await exchange.client.createTrader({ privateKey: creatorKey }).faucet({ amount: FAUCET_USDC });
-      console.log(`Faucet claimed ${unitsToUsdc(FAUCET_USDC).toFixed(2)} USDC (${faucetTx.txHash ?? "submitted"})`);
+      console.log(`Faucet claimed ${unitsToUsdc(FAUCET_USDC).toFixed(2)} USDC (${faucetTx.hash ?? "submitted"})`);
     } finally {
       await exchange.close().catch(() => undefined);
     }

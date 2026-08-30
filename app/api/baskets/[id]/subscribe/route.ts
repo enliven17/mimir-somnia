@@ -22,7 +22,7 @@ import { subscribeToBasket, unsubscribeFromBasket } from "@/lib/db";
 export const dynamic = "force-dynamic";
 
 /** Signed by the subscriber. States the cap in the text they actually see. */
-export function subscribeMessage(args: {
+function subscribeMessage(args: {
   basketId: string; subscriber: string; perMarketUsdc: number;
 }): string {
   return [

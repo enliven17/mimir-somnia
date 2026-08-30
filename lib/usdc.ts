@@ -11,9 +11,9 @@ import { parseAbi } from "viem";
 import { DREAMDEX_ADDRESSES } from "./dreamdex";
 
 /** Circle's official Somnia Shannon testnet USDC. */
-export const USDC_ADDRESS =
+export const USDC_ADDRESS: `0x${string}` =
   (process.env.NEXT_PUBLIC_COLLATERAL_ADDRESS?.trim() as `0x${string}` | undefined) ||
-  DREAMDEX_ADDRESSES.collateral;
+  (DREAMDEX_ADDRESSES.collateral as `0x${string}`);
 
 export const USDC_DECIMALS = 6;
 export const USDC_SYMBOL = "USDC";
