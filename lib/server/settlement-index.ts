@@ -14,7 +14,12 @@
 
 import { parseAbiItem, type Log } from "viem";
 
-import { createSomniaPublicClient, getContractAddress, isContractConfigured } from "@/lib/chain";
+import {
+  createSomniaPublicClient,
+  getContractAddress,
+  isContractConfigured,
+  SOMNIA_LOG_CHUNK,
+} from "@/lib/chain";
 import {
   getSyncMeta,
   insertFeeAccrual,
@@ -27,10 +32,12 @@ import {
 const CURSOR_KEY = "settlement_cursor_block";
 
 /**
- * Public RPCs cap eth_getLogs ranges, and the cap is not advertised. 5k blocks is
- * comfortably inside the Somnia testnet provider window.
+ * The Somnia testnet RPC caps eth_getLogs at 1000 blocks and says so only by
+ * rejecting the call, so this shares lib/chain's single SOMNIA_LOG_CHUNK knob
+ * rather than keeping its own copy of the number — a local 5k constant here made
+ * every sync poll fail while the rest of the app was already within the cap.
  */
-const CHUNK_BLOCKS = 5_000n;
+const CHUNK_BLOCKS = SOMNIA_LOG_CHUNK;
 
 /** A cold start walks from the deploy block; there is nothing older to find. */
 function deployBlock(): bigint {
