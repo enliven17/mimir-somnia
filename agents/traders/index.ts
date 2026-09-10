@@ -16,7 +16,8 @@ import {
   withDreamDexSigner,
   type DreamDexMarket,
 } from "../../lib/dreamdex-market";
-import { DREAMDEX_NETWORK } from "../../lib/dreamdex";
+import { COLLATERAL, DREAMDEX_NETWORK } from "../../lib/dreamdex";
+import { ERC20_ABI, unitsToUsdc } from "../../lib/usdc";
 import { callLLM, activeLLMModel, activeLLMProvider, extractJson, pickGeminiModel } from "../../lib/llm";
 import { reportingPoll } from "../../lib/ops/heartbeat";
 import { AUTHORITY_LEVELS, defaultLimits, REGISTRY_SCHEMA_VERSION, type AgentRecord } from "../../lib/agents/registry";
@@ -133,9 +134,22 @@ async function tradableFor(wallet: AgentWallet): Promise<DreamDexMarket[]> {
   );
 }
 
-function collateralBalance(balances: Record<string, { total: number }>): number {
-  return Object.entries(balances)
-    .find(([code]) => !code.includes("#") && /usdc|usdso|usd/i.test(code))?.[1].total ?? 0;
+/**
+ * Spendable collateral, read from the token rather than from the venue.
+ *
+ * The venue's balance call answers 0 for a funded wallet often enough to
+ * matter — a trader holding 20 was told it had nothing and stood aside. An
+ * order settles against the wallet's ERC-20 balance anyway, so the token is
+ * both the authority and the reading that does not flicker.
+ */
+async function collateralBalance(address: `0x${string}`): Promise<number> {
+  const raw = (await createSomniaPublicClient().readContract({
+    address: COLLATERAL as `0x${string}`,
+    abi: ERC20_ABI,
+    functionName: "balanceOf",
+    args: [address],
+  })) as bigint;
+  return unitsToUsdc(raw);
 }
 
 async function runTrader(persona: TraderPersona): Promise<void> {
@@ -154,8 +168,9 @@ async function runTrader(persona: TraderPersona): Promise<void> {
   const markets = await tradableFor(wallet);
   if (!markets.length) return void console.log("[traders]   nothing tradable this cycle");
 
+  const balance = await collateralBalance(wallet.address);
+
   await withDreamDexSigner(privateKey, async (exchange) => {
-    const balance = collateralBalance(await exchange.fetchBalance());
     console.log(`[traders]   collateral ${balance.toFixed(4)}`);
     if (balance < persona.stakeUsdc) {
       console.log(`[traders]   below ${persona.stakeUsdc} collateral, standing aside`);

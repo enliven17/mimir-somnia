@@ -21,7 +21,7 @@ import {
   computeAgentPerformance, windowSinceMs,
   type AgentPerformance, type AgentTradeResult, type TimeWindow,
 } from "@/lib/agents/performance";
-import { getAgentTradeRows, listAgentRecords } from "@/lib/db";
+import { getAgentTradeRows, getAgentTradeRowsBatch, listAgentRecords } from "@/lib/db";
 
 export type AgentTrack = "byoa" | "council" | "philosopher" | "core";
 
@@ -133,12 +133,16 @@ export async function listAgentsWithPerformance(
 ): Promise<AgentWithPerformance[]> {
   const agents = await listDirectoryAgents();
   const sinceMs = windowSinceMs(window, nowMs);
-  const rows = await Promise.all(
-    agents.map((agent) => getAgentTradeRows(agent.address).catch(() => [])),
-  );
-  return agents.map((agent, index) => ({
+  // One batched read, not one per agent: the per-agent version was fifty
+  // round trips for a single table and dominated the page's render time.
+  const byWallet = await getAgentTradeRowsBatch(agents.map((agent) => agent.address))
+    .catch(() => new Map<string, Awaited<ReturnType<typeof getAgentTradeRows>>>());
+  return agents.map((agent) => ({
     ...agent,
-    performance: computeAgentPerformance(rows[index], { sinceMs }).performance,
+    performance: computeAgentPerformance(
+      byWallet.get(agent.address.toLowerCase()) ?? [],
+      { sinceMs },
+    ).performance,
   }));
 }
 

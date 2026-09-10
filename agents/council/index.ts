@@ -42,7 +42,8 @@ import {
   weiToStt,
 } from "../../lib/chain";
 const weiToEth = weiToStt;
-import { unitsToUsdc } from "../../lib/usdc";
+import { ERC20_ABI, unitsToUsdc } from "../../lib/usdc";
+import { COLLATERAL } from "../../lib/dreamdex";
 import { MIMIR_ABI, STATE } from "../../lib/mimir-abi";
 import { reportingPoll } from "../../lib/ops/heartbeat";
 import { fetchDecodedClaim } from "../../lib/claim-codec";
@@ -86,6 +87,14 @@ const PEER_READ_CAP_USDC   = Number(process.env.COUNCIL_PEER_READ_CAP_USDC ?? "0
 const MARKETS_PER_CYCLE    = Number(process.env.COUNCIL_MAX_MARKETS ?? 2);
 const DREAMDEX_ENABLED     = process.env.COUNCIL_DREAMDEX !== "0";
 const DRY_RUN              = process.env.COUNCIL_DRY_RUN === "1";
+/**
+ * Only consider markets with enough life left to survive a cycle.
+ *
+ * A cycle walks 20 personas over every market in scope, and the venue lists
+ * markets that settle within the hour. At 300s of headroom the council kept
+ * picking markets that expired before the later personas reached them.
+ */
+const MIN_HEADROOM_SECONDS = Number(process.env.COUNCIL_MIN_HEADROOM_SECONDS ?? 1800);
 const CONTRACT_ADDRESS     = getContractAddress();
 const publicClient         = createSomniaPublicClient();
 
@@ -202,14 +211,23 @@ function personaPrivateKey(persona: PersonaSpec): `0x${string}` | null {
 }
 
 /**
- * Collateral the venue reports for this account.
+ * Spendable collateral for this persona, read from the token itself.
  *
- * Balances come back keyed by code, with outcome tokens keyed as "MARKET#YES".
- * The plain USD-ish code is the spendable collateral; the rest are positions.
+ * The venue's own balance call is what a persona used to be gated on, and it
+ * answers 0 for a funded wallet often enough to matter: the same wallet that
+ * held 20 was told it had nothing and stood aside, in the council and in the
+ * traders alike. An order settles against the wallet's ERC-20 balance anyway —
+ * a buy of 1.5 took that wallet from 20.00 to 18.54 — so the token is both the
+ * authority and the reading that does not flicker.
  */
-function collateralBalance(balances: Record<string, { total: number }>): number {
-  return Object.entries(balances)
-    .find(([code]) => !code.includes("#") && /usdc|usdso|usd/i.test(code))?.[1].total ?? 0;
+async function collateralBalance(address: `0x${string}`): Promise<number> {
+  const raw = (await publicClient.readContract({
+    address: COLLATERAL as `0x${string}`,
+    abi: ERC20_ABI,
+    functionName: "balanceOf",
+    args: [address],
+  })) as bigint;
+  return unitsToUsdc(raw);
 }
 
 // ── DreamDEX phase ─────────────────────────────────────────────────
@@ -227,7 +245,7 @@ async function pollMarkets(): Promise<number> {
   // Closest to settling first, same priority the claim phase uses: those are
   // the markets where a persona's read is about to be graded.
   const tradable = all
-    .filter((market) => market.status === "Trading" && market.expiry > nowSeconds + 300)
+    .filter((market) => market.status === "Trading" && market.expiry > nowSeconds + MIN_HEADROOM_SECONDS)
     .sort((a, b) => a.expiry - b.expiry)
     .slice(0, MARKETS_PER_CYCLE)
     .map(toCouncilMarket);
@@ -243,9 +261,11 @@ async function pollMarkets(): Promise<number> {
     if (!privateKey) continue;
 
     try {
-      await withDreamDexSigner(privateKey, async (exchange) => {
-        const bankroll = collateralBalance(await exchange.fetchBalance());
+      const address = process.env[addressEnvFor(persona)] as `0x${string}` | undefined;
+      if (!address) continue;
+      const bankroll = await collateralBalance(address);
 
+      await withDreamDexSigner(privateKey, async (exchange) => {
         // A persona that already holds or bid on a market has made its call
         // there; re-buying would average into a position it already sized.
         const balances = await exchange.fetchBalance();
@@ -258,20 +278,27 @@ async function pollMarkets(): Promise<number> {
         ]);
 
         for (const market of tradable) {
-          const receipt = await runPersonaForMarket({
-            persona,
-            market,
-            exchange: exchange as never,
-            bankrollUsdc: bankroll,
-            engagedRefs,
-            dryRun: DRY_RUN,
-          });
-          if (receipt) {
-            buys += 1;
-            engagedRefs.add(market.ref.toLowerCase());
-          }
-          if (DECISION_DELAY_MS > 0) {
-            await new Promise((resolve) => setTimeout(resolve, DECISION_DELAY_MS));
+          // Per market, not per persona: a symbol the venue has forgotten or a
+          // book that cannot be read must cost this one decision, not the rest
+          // of this persona's cycle.
+          try {
+            const receipt = await runPersonaForMarket({
+              persona,
+              market,
+              exchange: exchange as never,
+              bankrollUsdc: bankroll,
+              engagedRefs,
+              dryRun: DRY_RUN,
+            });
+            if (receipt) {
+              buys += 1;
+              engagedRefs.add(market.ref.toLowerCase());
+            }
+          } catch (err) {
+            console.warn(
+              `[council:${persona.slug}] ${market.ref} failed:`,
+              err instanceof Error ? err.message.slice(0, 120) : err,
+            );
           }
         }
       });

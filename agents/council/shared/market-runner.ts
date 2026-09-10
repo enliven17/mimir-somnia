@@ -34,6 +34,9 @@ const KELLY_CAP = 0.15;
 /** Slippage allowed on a market buy, as a fraction of the quoted ask. */
 const SLIPPAGE = 0.03;
 
+/** Refuse to open a position this close to expiry. */
+const MIN_HEADROOM_MS = Number(process.env.COUNCIL_MIN_HEADROOM_MS ?? 120_000);
+
 /**
  * Keyword tags so specialist personas filter markets the way they filter
  * claims. DreamDEX markets carry an asset and a question but no category, and a
@@ -252,6 +255,17 @@ export async function runPersonaForMarket(args: {
   // the persona already sized, and the rationale on record would no longer
   // describe the position.
   if (engagedRefs.has(market.ref.toLowerCase())) return null;
+
+  // A cycle walks every persona over every market in scope, which takes minutes
+  // — long enough for a short-dated market to expire between the moment it was
+  // picked and the moment this persona reaches it. Once it does, the venue no
+  // longer knows the symbol ("unknown symbol … call loadMarkets()") and the
+  // order throws. Re-check against the clock rather than against the list that
+  // was read at the top of the cycle.
+  if (market.expiry * 1000 - Date.now() < MIN_HEADROOM_MS) {
+    console.log(`[council:${persona.slug}] ${market.ref} expired during this cycle, skipping`);
+    return null;
+  }
 
   const baseStakeUsdc = persona.stakeUsdc ?? DEFAULT_STAKE_USDC;
   // Keep a 2x buffer so a persona never commits its last collateral.

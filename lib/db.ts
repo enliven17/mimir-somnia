@@ -2213,6 +2213,66 @@ export async function getAgentTradeRows(address: string): Promise<AgentTradeRow[
   return rows;
 }
 
+/**
+ * Trade rows for many agents in two queries instead of two per agent.
+ *
+ * The agents page asks for every agent's performance at once. Per-agent that
+ * was fifty round trips to Postgres for a page that renders one table, and it
+ * cost nine seconds even with both tables empty — the time was the round trips,
+ * not the rows. Grouping is done here so callers keep the per-address shape.
+ */
+export async function getAgentTradeRowsBatch(
+  addresses: string[],
+): Promise<Map<string, AgentTradeRow[]>> {
+  const grouped = new Map<string, AgentTradeRow[]>();
+  const wallets = [...new Set(addresses.map((address) => address.toLowerCase()))];
+  for (const wallet of wallets) grouped.set(wallet, []);
+  if (wallets.length === 0) return grouped;
+
+  const pool = await getDb();
+  const placeholders = wallets.map((_, index) => `$${index + 1}`).join(", ");
+  const [created, challenged] = await Promise.all([
+    execute(pool, {
+      sql: `SELECT LOWER(creator) AS wallet, id, creator_stake, total_challenger_stake,
+        state, winner_side, updated_at, category, question
+        FROM claims WHERE LOWER(creator) IN (${placeholders}) ORDER BY id DESC`,
+      args: wallets,
+    }),
+    execute(pool, {
+      sql: `SELECT LOWER(ch.address) AS wallet, c.id, ch.stake, ch.potential_payout,
+        c.state, c.winner_side, c.updated_at, c.category, c.question
+        FROM challengers ch JOIN claims c ON c.id = ch.claim_id
+        WHERE LOWER(ch.address) IN (${placeholders}) ORDER BY c.id DESC`,
+      args: wallets,
+    }),
+  ]);
+
+  for (const raw of created.rows) {
+    const row = raw as Record<string, unknown>;
+    grouped.get(getString(row.wallet))?.push({
+      claimId: getNumber(row.id), role: "creator",
+      stake: getNumber(row.creator_stake),
+      opposingStake: getNumber(row.total_challenger_stake),
+      potentialPayout: 0,
+      state: getString(row.state), winnerSide: getString(row.winner_side),
+      settledAt: getNumber(row.updated_at),
+      category: getString(row.category), question: getString(row.question),
+    });
+  }
+  for (const raw of challenged.rows) {
+    const row = raw as Record<string, unknown>;
+    grouped.get(getString(row.wallet))?.push({
+      claimId: getNumber(row.id), role: "challenger",
+      stake: getNumber(row.stake), opposingStake: 0,
+      potentialPayout: getNumber(row.potential_payout),
+      state: getString(row.state), winnerSide: getString(row.winner_side),
+      settledAt: getNumber(row.updated_at),
+      category: getString(row.category), question: getString(row.question),
+    });
+  }
+  return grouped;
+}
+
 /** Registry listing for the agents page. Revoked agents are shown, not hidden. */
 export async function listAgentRecords(limit = 100): Promise<AgentRecord[]> {
   const pool = await getDb();
