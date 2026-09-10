@@ -79,3 +79,68 @@ export interface PersonaStakeReceipt {
   txHash:    string;
   rationale: string;
 }
+
+// ── DreamDEX binary markets ───────────────────────────────────────────────────
+// The council votes on two venues. VS claims (above) are head-to-head positions
+// users open on the Mimir contract, where a persona can only join the challenger
+// side. DreamDEX binary markets are the protocol's own event contracts, where
+// both outcomes are tradeable — so a persona picks a side rather than deciding
+// whether to object to someone else's.
+
+/** Which outcome a persona would buy. */
+export type MarketOutcome = "YES" | "NO";
+
+/**
+ * The market view a persona reasons about. Narrower than DreamDexMarket on
+ * purpose: the decision layer should not be able to reach for pool internals or
+ * raw protocol fields, so what it may consider is written down here.
+ */
+export interface CouncilMarket {
+  /** Market reference used for ordering and logs. */
+  ref:            string;
+  symbol:         string;
+  question:       string;
+  asset:          string;
+  /** The rule the protocol oracle settles by, when the market states one. */
+  oracleQuestion: string | null;
+  /** Derived tags, so specialist personas can filter as they do for claims. */
+  category:       string;
+  /** Unix seconds. */
+  expiry:         number;
+  yesSymbol:      string;
+  noSymbol:       string;
+  /** Last traded YES price in [0,1] — the market's own probability. */
+  yesProbability: number | null;
+  volume:         number;
+  tradeCount:     number;
+}
+
+/** What a persona decides about one market in one cycle. */
+export interface MarketDecision {
+  shouldBuy:   boolean;
+  /** Only meaningful when shouldBuy is true. */
+  outcome:     MarketOutcome | null;
+  /** Collateral to spend. */
+  stakeUsdc:   number;
+  rationale:   string;
+  confidence?: number;
+  skipReason?:
+    | "category-filter"
+    | "abstain-low-confidence"
+    | "abstain-no-edge"
+    | "already-positioned"
+    | "not-trading"
+    | "expiring"
+    | "insufficient-balance"
+    | "no-liquidity"
+    | "llm-failed";
+}
+
+export interface MarketBuyReceipt {
+  persona:   PersonaSpec;
+  ref:       string;
+  outcome:   MarketOutcome;
+  stakeUsdc: number;
+  txHash:    string;
+  rationale: string;
+}

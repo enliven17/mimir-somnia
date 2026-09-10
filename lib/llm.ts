@@ -36,7 +36,7 @@ export interface CallLLMOptions {
   model?: string;
 }
 
-const DEFAULT_GEMINI_MODEL = process.env.GEMINI_DEFAULT_MODEL || "gemini-3.7-flash";
+const DEFAULT_GEMINI_MODEL = process.env.GEMINI_DEFAULT_MODEL || "gemini-3.8-flash";
 
 /**
  * Gemini model pool for load-spreading. Free-tier limits are per-model, so
@@ -524,6 +524,18 @@ async function callGeminiModel(
       throw new Error(`Gemini ${model} 429: ${lastBody}`);
     }
     if (!transient.has(res.status) || attempt === maxAttempts) {
+      // A model can be unavailable for a while, not just for this call —
+      // gemini-3.7-flash answered 503 "high demand" for hours. Without a
+      // cooldown every later call pays the full retry ladder (~7s of backoff)
+      // before borrowing the next model in the pool, on every agent assigned to
+      // it. Treat exhausted transient failures like a quota trip so the pool
+      // skips that model until it has had time to recover.
+      if (transient.has(res.status)) {
+        tripGeminiCooldown(apiKey, model);
+        console.warn(
+          `[llm] Gemini ${model}@${keyFingerprint(apiKey)} ${res.status} after ${maxAttempts} attempts - ${Math.round(GEMINI_QUOTA_COOLDOWN_MS / 1000)}s cooldown`,
+        );
+      }
       throw new Error(`Gemini ${model} ${res.status}: ${lastBody}`);
     }
 

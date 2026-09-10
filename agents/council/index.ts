@@ -61,6 +61,8 @@ import {
   philosopherPrivateKeyEnv,
 } from "./philosophers";
 import { runPersonaForClaim } from "./shared/persona-runner";
+import { runPersonaForMarket, toCouncilMarket } from "./shared/market-runner";
+import { loadDreamDexMarkets, withDreamDexSigner } from "../../lib/dreamdex-market";
 import { buyPeerReasoning } from "./shared/peer-reasoning";
 import type {
   ClaimOnChain,
@@ -81,6 +83,9 @@ const PEER_READS_APP_URL  = process.env.MIMIR_APP_URL ?? "http://localhost:3000"
 const PEER_READS_PER_PERSONA = Number(process.env.COUNCIL_PEER_READS_PER_PERSONA ?? 2);
 const PEER_READ_DELAY_MS   = Number(process.env.COUNCIL_PEER_READ_DELAY_MS ?? 15000);
 const PEER_READ_CAP_USDC   = Number(process.env.COUNCIL_PEER_READ_CAP_USDC ?? "0.003");
+const MARKETS_PER_CYCLE    = Number(process.env.COUNCIL_MAX_MARKETS ?? 2);
+const DREAMDEX_ENABLED     = process.env.COUNCIL_DREAMDEX !== "0";
+const DRY_RUN              = process.env.COUNCIL_DRY_RUN === "1";
 const CONTRACT_ADDRESS     = getContractAddress();
 const publicClient         = createSomniaPublicClient();
 
@@ -176,8 +181,112 @@ async function fetchClaim(claimId: number): Promise<ClaimOnChain | null> {
   }
 }
 
+// ── Wallet env per track ──────────────────────────────────────────────
+// Classic personas and philosophers keep their keys under different env names,
+// so ask the track rather than assuming one shape.
+function privateKeyEnvFor(persona: PersonaSpec): string {
+  return isPhilosopher(persona)
+    ? philosopherPrivateKeyEnv(persona.slug)
+    : personaPrivateKeyEnv(persona);
+}
+
+function addressEnvFor(persona: PersonaSpec): string {
+  return isPhilosopher(persona)
+    ? philosopherAddressEnv(persona.slug)
+    : personaAddressEnv(persona);
+}
+
+function personaPrivateKey(persona: PersonaSpec): `0x${string}` | null {
+  const raw = process.env[privateKeyEnvFor(persona)]?.trim();
+  return raw && /^0x[0-9a-fA-F]{64}$/.test(raw) ? (raw as `0x${string}`) : null;
+}
+
+/**
+ * Collateral the venue reports for this account.
+ *
+ * Balances come back keyed by code, with outcome tokens keyed as "MARKET#YES".
+ * The plain USD-ish code is the spendable collateral; the rest are positions.
+ */
+function collateralBalance(balances: Record<string, { total: number }>): number {
+  return Object.entries(balances)
+    .find(([code]) => !code.includes("#") && /usdc|usdso|usd/i.test(code))?.[1].total ?? 0;
+}
+
+// ── DreamDEX phase ─────────────────────────────────────────────────
+/**
+ * The council's second venue: the protocol's own binary event markets.
+ *
+ * VS claims (below) only exist once a user opens one, and the council sat idle
+ * whenever nobody had — while the market-creator was filling DreamDEX with
+ * markets no persona ever looked at. Both juries now vote on both venues.
+ */
+async function pollMarkets(): Promise<number> {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const all = await loadDreamDexMarkets({ includeInactive: false, reload: true });
+
+  // Closest to settling first, same priority the claim phase uses: those are
+  // the markets where a persona's read is about to be graded.
+  const tradable = all
+    .filter((market) => market.status === "Trading" && market.expiry > nowSeconds + 300)
+    .sort((a, b) => a.expiry - b.expiry)
+    .slice(0, MARKETS_PER_CYCLE)
+    .map(toCouncilMarket);
+
+  console.log(
+    `[council] DreamDEX: ${tradable.length} of ${all.length} market(s) in scope this cycle`,
+  );
+  if (tradable.length === 0) return 0;
+
+  let buys = 0;
+  for (const persona of ALL_ACTIVE) {
+    const privateKey = personaPrivateKey(persona);
+    if (!privateKey) continue;
+
+    try {
+      await withDreamDexSigner(privateKey, async (exchange) => {
+        const bankroll = collateralBalance(await exchange.fetchBalance());
+
+        // A persona that already holds or bid on a market has made its call
+        // there; re-buying would average into a position it already sized.
+        const balances = await exchange.fetchBalance();
+        const openOrders = await exchange.fetchOpenOrders().catch(() => []);
+        const engagedRefs = new Set<string>([
+          ...openOrders.map((order: { symbol?: string }) => (order.symbol ?? "").split("#")[0].toLowerCase()),
+          ...Object.entries(balances)
+            .filter(([code, balance]) => code.includes("#") && (balance as { total: number }).total > 0)
+            .map(([code]) => code.split("#")[0].toLowerCase()),
+        ]);
+
+        for (const market of tradable) {
+          const receipt = await runPersonaForMarket({
+            persona,
+            market,
+            exchange: exchange as never,
+            bankrollUsdc: bankroll,
+            engagedRefs,
+            dryRun: DRY_RUN,
+          });
+          if (receipt) {
+            buys += 1;
+            engagedRefs.add(market.ref.toLowerCase());
+          }
+          if (DECISION_DELAY_MS > 0) {
+            await new Promise((resolve) => setTimeout(resolve, DECISION_DELAY_MS));
+          }
+        }
+      });
+    } catch (err) {
+      console.error(
+        `[council:${persona.slug}] DreamDEX phase failed:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  return buys;
+}
+
 // ── Poll loop ─────────────────────────────────────────────────────────────────
-async function poll(): Promise<void> {
+async function pollClaims(): Promise<number> {
   const now = BigInt(Math.floor(Date.now() / 1000));
 
   let total: bigint;
@@ -187,11 +296,11 @@ async function poll(): Promise<void> {
     }) as bigint;
   } catch (err) {
     console.warn("[council] Failed to read claimCount:", err);
-    return;
+    return 0;
   }
 
   console.log(
-    `\n[council] ── Poll at ${new Date().toISOString()} ── ${total} claims, ${ACTIVE_PERSONAS.length} personas`,
+    `\n[council] ── Poll at ${new Date().toISOString()} ── VS claims: ${total} · personas: ${ALL_ACTIVE.length}`,
   );
 
   // Shared per-cycle evidence cache — one HTTP fetch per claim no matter
@@ -216,8 +325,8 @@ async function poll(): Promise<void> {
     if (joinable) allClaims.push(claim);
   }
   if (allClaims.length === 0) {
-    console.log("[council] No joinable claims this round.");
-    return;
+    console.log("[council] VS: no joinable claims this round.");
+    return 0;
   }
 
   // Focus on claims closest to settling — they're the most interesting for
@@ -274,10 +383,36 @@ async function poll(): Promise<void> {
     }
   }
 
+  return stakesThisCycle;
+}
+
+/**
+ * One cycle over both venues.
+ *
+ * The two phases are independent on purpose: a legacy contract with no claims
+ * must not stop the council from trading DreamDEX, and a DreamDEX outage must
+ * not stop it from answering a VS claim.
+ */
+async function poll(): Promise<void> {
+  let stakes = 0;
+  try {
+    stakes += await pollClaims();
+  } catch (err) {
+    console.error("[council] VS phase failed:", err instanceof Error ? err.message : err);
+  }
+
+  if (DREAMDEX_ENABLED) {
+    try {
+      stakes += await pollMarkets();
+    } catch (err) {
+      console.error("[council] DreamDEX phase failed:", err instanceof Error ? err.message : err);
+    }
+  }
+
   console.log(
-    stakesThisCycle > 0
-      ? `[council] Cycle complete — ${stakesThisCycle} new stakes submitted.`
-      : "[council] Cycle complete — no new stakes.",
+    stakes > 0
+      ? `[council] Cycle complete — ${stakes} position(s) opened.`
+      : "[council] Cycle complete — no new positions.",
   );
 }
 
@@ -291,6 +426,7 @@ async function main(): Promise<void> {
   console.log(`  Active personas: ${ACTIVE_PERSONAS.length} / ${CLASSIC_PERSONAS.length}`);
   console.log(`  Philosophers   : ${PHILOSOPHERS_ENABLED ? `${ACTIVE_PHILOSOPHERS.length} / ${PHILOSOPHER_PERSONAS.length}` : "off"}`);
   console.log(`  Max claims/cycle: ${MAX_CLAIMS_PER_CYCLE}`);
+  console.log(`  DreamDEX       : ${DREAMDEX_ENABLED ? `${MARKETS_PER_CYCLE} market(s)/cycle` : "off"}${DRY_RUN ? " · DRY RUN" : ""}`);
   console.log(`  Decision gap   : ${DECISION_DELAY_MS / 1000}s`);
   console.log(`  Peer reads     : ${PEER_READS_ENABLED ? `${PEER_READS_PER_PERSONA}/persona via ${PEER_READS_APP_URL}` : "off"}`);
   console.log(`  Peer read gap  : ${PEER_READ_DELAY_MS / 1000}s`);
