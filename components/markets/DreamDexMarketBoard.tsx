@@ -1,5 +1,8 @@
 "use client";
 
+/** How far past the best quote a "market" order may fill. */
+const MARKET_SLIPPAGE = 0.03;
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWalletClient } from "wagmi";
 import { createExchange } from "@/lib/dreamdex";
@@ -142,11 +145,41 @@ export default function DreamDexMarketBoard() {
         const symbol = outcome === "YES"
           ? selected.yesSymbol
           : selected.noSymbol;
-        const numericPrice = Number(price);
-        if (type === "limit" && (!Number.isFinite(numericPrice) || numericPrice <= 0 || numericPrice >= 1)) {
-          throw new Error("Limit price must be between 0 and 1");
+
+        // Both the price and the quantity have to sit on the pool's grids, or
+        // the order reverts before it reaches the book — InvalidPrice(304750,
+        // 1000) is a price of 0.30475 against a 0.001 tick. A typed price is
+        // almost never on the grid, so it is snapped here rather than rejected.
+        const sizedQuantity = exchange.amountToPrecision(symbol, quantity);
+        if (!(sizedQuantity > 0)) {
+          throw new Error("Amount is smaller than this market's minimum order size");
         }
-        result = await exchange.createOrder(symbol, type, side, quantity, type === "limit" ? numericPrice : undefined);
+
+        let limitPrice: number;
+        if (type === "limit") {
+          const numericPrice = Number(price);
+          if (!Number.isFinite(numericPrice) || numericPrice <= 0 || numericPrice >= 1) {
+            throw new Error("Limit price must be between 0 and 1");
+          }
+          limitPrice = exchange.priceToPrecision(symbol, numericPrice);
+        } else {
+          // "Market" is an IOC limit that crosses the book. The SDK's own market
+          // type derives its price from the book without snapping it, so it can
+          // only ever send a price the pool rejects.
+          const book = await exchange.fetchOrderBook(symbol, 5);
+          const best = side === "buy" ? book.asks[0]?.[0] : book.bids[0]?.[0];
+          if (!best || best <= 0) {
+            throw new Error(`No ${side === "buy" ? "asks" : "bids"} on this side to trade against`);
+          }
+          const crossed = side === "buy"
+            ? Math.min(best * (1 + MARKET_SLIPPAGE), 0.999)
+            : Math.max(best * (1 - MARKET_SLIPPAGE), 0.001);
+          limitPrice = exchange.priceToPrecision(symbol, crossed);
+        }
+
+        result = await exchange.createOrder(symbol, "limit", side, sizedQuantity, limitPrice, {
+          timeInForce: type === "market" ? "IOC" : undefined,
+        });
       } else if (action === "mint") {
         result = await exchange.mintSet(unified.symbol, quantity);
       } else if (action === "burn") {
