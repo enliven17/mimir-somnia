@@ -62,8 +62,9 @@ export function isContractConfigured(): boolean {
 }
 
 // ── Log scanning ──────────────────────────────────────────────────────────────
-// Providers cap eth_getLogs block ranges (commonly 10k, some at 2k). 5k is a
-// safe middle ground; override per-provider with SOMNIA_LOG_CHUNK.
+// The Somnia testnet RPC rejects eth_getLogs ranges wider than 1000 blocks
+// ("block range exceeds 1000"), and a chunk spans start..start+CHUNK inclusive,
+// so 999 is the widest request it accepts. Override with SOMNIA_LOG_CHUNK.
 function envInt(key: string, fallback: number): number {
   const raw = Number(
     (typeof process !== "undefined" && process.env?.[key]) || String(fallback),
@@ -71,7 +72,7 @@ function envInt(key: string, fallback: number): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
 }
 
-export const SOMNIA_LOG_CHUNK = BigInt(envInt("SOMNIA_LOG_CHUNK", 5_000));
+export const SOMNIA_LOG_CHUNK = BigInt(envInt("SOMNIA_LOG_CHUNK", 999));
 
 /** How many eth_getLogs chunks stay in flight. */
 export const SOMNIA_LOG_CONCURRENCY = envInt("SOMNIA_LOG_CONCURRENCY", 8);

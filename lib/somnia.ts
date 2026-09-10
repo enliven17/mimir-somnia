@@ -69,9 +69,9 @@ export function getDreamdexIndexerUrl(): string {
 }
 
 // ── Log scanning ──────────────────────────────────────────────────────────────
-// Somnia RPCs are unthrottled (the docs state market data is the chain itself),
-// but a defensible chunk size still beats one giant eth_getLogs range on any
-// provider. Tune via SOMNIA_LOG_CHUNK / SOMNIA_LOG_CONCURRENCY.
+// The Somnia testnet RPC rejects eth_getLogs ranges wider than 1000 blocks
+// ("block range exceeds 1000"), and a chunk spans start..start+CHUNK inclusive,
+// so 999 is the widest request it accepts. Tune via SOMNIA_LOG_CHUNK.
 function envInt(key: string, fallback: number): number {
   const raw = Number(
     (typeof process !== "undefined" && process.env?.[key]) || String(fallback),
@@ -79,7 +79,7 @@ function envInt(key: string, fallback: number): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
 }
 
-export const SOMNIA_LOG_CHUNK = BigInt(envInt("SOMNIA_LOG_CHUNK", 5_000));
+export const SOMNIA_LOG_CHUNK = BigInt(envInt("SOMNIA_LOG_CHUNK", 999));
 export const SOMNIA_LOG_CONCURRENCY = envInt("SOMNIA_LOG_CONCURRENCY", 8);
 
 export async function paginatedGetLogs(
