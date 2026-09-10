@@ -90,14 +90,40 @@ export interface MarketExchange {
     symbol: string,
     limit?: number,
   ): Promise<{ bids: Array<[number, number]>; asks: Array<[number, number]> }>;
+  /** Snap a price to the pool's tick grid. */
+  priceToPrecision(symbol: string, price: number): number;
+  /** Snap a quantity to the pool's lot grid. */
+  amountToPrecision(symbol: string, amount: number): number;
   createOrder(
     symbol: string,
-    type: "market",
+    type: "limit",
     side: "buy",
     amount: number,
-    price?: undefined,
+    price: number,
     params?: Record<string, unknown>,
   ): Promise<{ id?: string; txHash?: string | null }>;
+}
+
+/**
+ * Cross the book with a price the pool will actually accept.
+ *
+ * The venue rejects any price off its tick grid — `InvalidPrice(304750, 1000)`
+ * is a price of 0.30475 against a tick of 0.001 — and the SDK's own "market"
+ * order type derives its crossing price from the book without snapping it,
+ * which reverted every buy the council decided to make. So the crossing price
+ * is built here, snapped, and sent as an IOC limit order: same taker behaviour,
+ * a price the pool can take.
+ *
+ * Snapping rounds down, so the slippage margin has to be wider than one tick or
+ * the rounded price can land back under the ask and never fill.
+ */
+export function crossingPrice(
+  exchange: Pick<MarketExchange, "priceToPrecision">,
+  symbol: string,
+  bestAsk: number,
+  slippage: number,
+): number {
+  return exchange.priceToPrecision(symbol, Math.min(bestAsk * (1 + slippage), 0.999));
 }
 
 /**
@@ -268,15 +294,23 @@ export async function runPersonaForMarket(args: {
     return null;
   }
 
-  const quantity = stakeUsdc / bestAsk;
-  const order = await exchange.createOrder(symbol, "market", "buy", quantity, undefined, {
-    slippage: SLIPPAGE,
+  const price = crossingPrice(exchange, symbol, bestAsk, SLIPPAGE);
+  const quantity = exchange.amountToPrecision(symbol, stakeUsdc / price);
+  if (!(quantity > 0)) {
+    console.log(
+      `[council:${persona.slug}]   ${market.ref} stake of ${stakeUsdc} is under one lot at ${price}, skipping`,
+    );
+    return null;
+  }
+
+  const order = await exchange.createOrder(symbol, "limit", "buy", quantity, price, {
+    timeInForce: "IOC",
   });
   const txHash = order.txHash ?? order.id ?? "";
 
   console.log(
     `[council:${persona.slug}] ✓ bought ${outcome} on ${market.ref} for ${stakeUsdc} collateral ` +
-    `(${quantity.toFixed(4)} @ ${bestAsk.toFixed(4)}) — ${txHash}`,
+    `(${quantity.toFixed(4)} @ ${price.toFixed(4)}) — ${txHash}`,
   );
 
   return { persona, ref: market.ref, outcome, stakeUsdc, txHash, rationale: decision.rationale };

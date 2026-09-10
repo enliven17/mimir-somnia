@@ -185,9 +185,22 @@ async function runTrader(persona: TraderPersona): Promise<void> {
           console.log(`[traders]   ${market.symbol} has no ask, skipping`);
           continue;
         }
-        const quantity = persona.stakeUsdc / bestAsk;
-        const order = await exchange.createOrder(symbol, "market", "buy", quantity, undefined, { slippage: 0.03 });
-        console.log(`[traders]   bought ${outcome} on ${market.symbol} · ${order.txHash ?? order.id}`);
+
+        // An IOC limit at a snapped price, not a "market" order. The pool
+        // rejects any price off its tick grid, and the SDK's market path prices
+        // off the book without snapping — every buy reverted with
+        // InvalidPrice(304750, 1000): 0.30475 against a 0.001 tick. Quantities
+        // are on a lot grid for the same reason.
+        const price = exchange.priceToPrecision(symbol, Math.min(bestAsk * 1.03, 0.999));
+        const quantity = exchange.amountToPrecision(symbol, persona.stakeUsdc / price);
+        if (!(quantity > 0)) {
+          console.log(`[traders]   ${market.symbol} stake is under one lot at ${price}, skipping`);
+          continue;
+        }
+        const order = await exchange.createOrder(symbol, "limit", "buy", quantity, price, { timeInForce: "IOC" });
+        console.log(
+          `[traders]   bought ${outcome} on ${market.symbol} · ${quantity.toFixed(4)} @ ${price.toFixed(4)} · ${order.txHash ?? order.id}`,
+        );
         traded += 1;
       } catch (error) {
         console.warn(`[traders]   ${market.symbol} order failed:`, error instanceof Error ? error.message : error);

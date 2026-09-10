@@ -125,16 +125,31 @@ test("sizing never drops below the base stake nor takes more than a tenth of the
   assert.equal(sizeStake(2, 5, 95, 75), 2);
 });
 
-/** Records orders instead of placing them. */
-function spyExchange(bestAsk: number | null): MarketExchange & { orders: unknown[] } {
-  const orders: unknown[] = [];
+/**
+ * Records orders instead of placing them, on the venue's real grids: prices
+ * move in ticks of 0.001 and quantities in lots of 0.01, and both snap down.
+ */
+function spyExchange(
+  bestAsk: number | null,
+  { tick = 0.001, lot = 0.01 }: { tick?: number; lot?: number } = {},
+): MarketExchange & { orders: Array<Record<string, unknown>> } {
+  const orders: Array<Record<string, unknown>> = [];
   return {
     orders,
     async fetchOrderBook() {
-      return { bids: [[0.4, 10]], asks: bestAsk === null ? [] : [[bestAsk, 100] as [number, number]] };
+      return {
+        bids: [[0.4, 10] as [number, number]],
+        asks: bestAsk === null ? [] : [[bestAsk, 100] as [number, number]],
+      };
     },
-    async createOrder(symbol, type, side, amount, _price, params) {
-      orders.push({ symbol, type, side, amount, params });
+    priceToPrecision(_symbol, price) {
+      return Number((Math.floor(price / tick + 1e-9) * tick).toFixed(6));
+    },
+    amountToPrecision(_symbol, amount) {
+      return Number((Math.floor(amount / lot + 1e-9) * lot).toFixed(6));
+    },
+    async createOrder(symbol, type, side, amount, price, params) {
+      orders.push({ symbol, type, side, amount, price, params });
       return { txHash: "0xdeadbeef" };
     },
   };
@@ -148,7 +163,7 @@ const rulePersona = {
   stakeUsdc: 1.5,
 } as unknown as PersonaSpec;
 
-test("a confident rule persona buys, sized in shares at the ask", async () => {
+test("a confident rule persona buys, sized in shares at a tick-aligned price", async () => {
   const exchange = spyExchange(0.25);
   const receipt = await runPersonaForMarket({
     persona: rulePersona,
@@ -161,11 +176,39 @@ test("a confident rule persona buys, sized in shares at the ask", async () => {
   assert.ok(receipt, "expected a receipt");
   assert.equal(receipt.outcome, "NO");
   assert.equal(exchange.orders.length, 1);
-  const order = exchange.orders[0] as { symbol: string; amount: number; side: string };
+  const order = exchange.orders[0];
   assert.equal(order.side, "buy");
   assert.equal(order.symbol, "BTC-100K#NO");
-  // 1.5 collateral at an ask of 0.25 is 6 shares — collateral is not the quantity.
-  assert.equal(order.amount, 6);
+
+  // An IOC limit, not a "market" order: the SDK's market path prices off the
+  // book without snapping to the tick, and the pool rejects that outright
+  // (InvalidPrice(304750, 1000) — 0.30475 against a 0.001 tick).
+  assert.equal(order.type, "limit");
+  assert.equal((order.params as { timeInForce?: string }).timeInForce, "IOC");
+
+  // 0.25 ask + 3% is 0.2575, snapped down to the 0.001 grid.
+  const price = order.price as number;
+  assert.equal(price, 0.257);
+  assert.ok(price > 0.25, "the crossing price must still be above the ask to fill");
+  assert.equal(Math.round(price * 1000) % 1, 0, "price must land on the tick grid");
+
+  // Collateral is not the quantity: 1.5 at 0.257 is 5.83… shares, snapped to the lot.
+  assert.equal(order.amount, 5.83);
+  assert.ok((order.amount as number) * price <= 1.5, "must not spend more than the stake");
+});
+
+test("a stake under one lot is skipped instead of ordering zero shares", async () => {
+  // A tenth of a collateral unit at a 0.9 price is under a 1.0 lot.
+  const exchange = spyExchange(0.9, { lot: 1 });
+  const receipt = await runPersonaForMarket({
+    persona: { ...rulePersona, stakeUsdc: 0.1 } as unknown as PersonaSpec,
+    market: market({ yesProbability: 0.85 }),
+    exchange,
+    bankrollUsdc: 50,
+    engagedRefs: new Set(),
+  });
+  assert.equal(receipt, null);
+  assert.equal(exchange.orders.length, 0, "a zero quantity must never be sent");
 });
 
 test("guards refuse to spend: already positioned, thin bankroll, no ask", async () => {
