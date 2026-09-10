@@ -20,9 +20,14 @@ import { BlueprintHeading } from "@/components/BlueprintGrid";
 
 // Every fetch* below re-scans the chain (per-claim getClaim reads, full
 // getLogs history from the deploy block). That's fine once per 30s, not
-// once per page view — cache each so concurrent/rapid visits share one
-// chain round-trip instead of each paying the full scan cost.
-export const revalidate = 30;
+// once per page view — cachedFor below collapses concurrent/rapid visits into
+// one chain round-trip instead of each paying the full scan cost.
+//
+// Rendered per request rather than prerendered: as ISR the build had to run
+// that whole scan against the public RPC before it could emit the page, which
+// took over 300s and blew Railway's build deadline. cachedFor, not the route
+// cache, is what keeps the scan from running per visit.
+export const dynamic = "force-dynamic";
 
 // ── Data ─────────────────────────────────────────────────────────────────────
 

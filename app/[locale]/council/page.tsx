@@ -10,6 +10,7 @@ import {
   paginatedGetLogs,
 } from "@/lib/chain";
 import { unitsToUsdc } from "@/lib/usdc";
+import { cachedFor } from "@/lib/server/ttl-cache";
 import {
   getActiveCouncilPersonas,
 } from "@/lib/council-resolver";
@@ -18,7 +19,10 @@ import { BlueprintHeading } from "@/components/BlueprintGrid";
 import { openPeepsAvatar } from "@/lib/avatars";
 import { AddressChip } from "@/components/ui/AddressChip";
 
-export const revalidate = 30;
+// Per request, not prerendered. As ISR the build had to scan the persona
+// challenge history and every persona balance off the public RPC before it
+// could emit the page; cachedFor below is what keeps that off the hot path.
+export const dynamic = "force-dynamic";
 
 // ── Data ─────────────────────────────────────────────────────────────────────
 
@@ -36,7 +40,9 @@ interface PersonaStats {
   }>;
 }
 
-async function fetchCouncilStats(): Promise<PersonaStats[]> {
+const fetchCouncilStats = cachedFor(fetchCouncilStatsUncached, 30_000);
+
+async function fetchCouncilStatsUncached(): Promise<PersonaStats[]> {
   if (!isContractConfigured()) return [];
   const client    = createSomniaPublicClient();
   const address   = getContractAddress();

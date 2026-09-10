@@ -29,7 +29,9 @@ import { cachedFor } from "@/lib/server/ttl-cache";
 // doesn't cache it (Next skips the Full Route Cache for dynamic renders) —
 // the persona filter would otherwise re-scan the full chain history on every
 // click. cachedFor covers the actual expensive work regardless.
-export const revalidate = 20;
+// Per request, not prerendered — the build cannot afford this page's chain
+// scan against the public RPC. cachedFor below keeps it off the hot path.
+export const dynamic = "force-dynamic";
 
 /* ── Data ────────────────────────────────────────────────────────────────── */
 
