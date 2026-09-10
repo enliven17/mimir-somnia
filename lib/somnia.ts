@@ -68,64 +68,6 @@ export function getDreamdexIndexerUrl(): string {
   return "https://dev.smk.somnia.host/v1/graphql";
 }
 
-// ── Log scanning ──────────────────────────────────────────────────────────────
-// The Somnia testnet RPC rejects eth_getLogs ranges wider than 1000 blocks
-// ("block range exceeds 1000"), and a chunk spans start..start+CHUNK inclusive,
-// so 999 is the widest request it accepts. Tune via SOMNIA_LOG_CHUNK.
-function envInt(key: string, fallback: number): number {
-  const raw = Number(
-    (typeof process !== "undefined" && process.env?.[key]) || String(fallback),
-  );
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
-}
-
-export const SOMNIA_LOG_CHUNK = BigInt(envInt("SOMNIA_LOG_CHUNK", 999));
-export const SOMNIA_LOG_CONCURRENCY = envInt("SOMNIA_LOG_CONCURRENCY", 8);
-
-export async function paginatedGetLogs(
-  client: PublicClient,
-  params: Omit<Parameters<PublicClient["getLogs"]>[0], "fromBlock" | "toBlock">,
-  fromBlock: bigint,
-  toBlock?: bigint,
-): Promise<any[]> {
-  const end = toBlock ?? (await client.getBlockNumber());
-  const ranges: Array<{ from: bigint; to: bigint }> = [];
-  for (let start = fromBlock; start <= end; ) {
-    const stop = start + SOMNIA_LOG_CHUNK > end ? end : start + SOMNIA_LOG_CHUNK;
-    ranges.push({ from: start, to: stop });
-    start = stop + 1n;
-  }
-  const pages: any[][] = new Array(ranges.length);
-  let next = 0;
-  let unavailable = 0;
-  let lastError: unknown = null;
-  const worker = async () => {
-    for (;;) {
-      const index = next++;
-      if (index >= ranges.length) return;
-      const { from, to } = ranges[index];
-      try {
-        pages[index] = await client.getLogs({
-          ...(params as any),
-          fromBlock: from,
-          toBlock: to,
-        });
-      } catch (error) {
-        pages[index] = [];
-        unavailable++;
-        lastError = error;
-      }
-    }
-  };
-  await Promise.all(
-    Array.from({ length: Math.min(SOMNIA_LOG_CONCURRENCY, ranges.length) }, worker),
-  );
-  if (unavailable === ranges.length && ranges.length > 0) {
-    throw lastError instanceof Error ? lastError : new Error("eth_getLogs failed for every block range");
-  }
-  return pages.flat();
-}
-
 export function getExplorerTxUrl(txHash: string): string {
   return `${SOMNIA_EXPLORER_URL}/tx/${txHash}`;
 }
@@ -135,6 +77,13 @@ export function getExplorerAddressUrl(address: string): string {
 }
 
 // ── viem clients ──────────────────────────────────────────────────────────────
+function envInt(key: string, fallback: number): number {
+  const raw = Number(
+    (typeof process !== "undefined" && process.env?.[key]) || String(fallback),
+  );
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
+}
+
 export const RPC_BATCH_SIZE = envInt("SOMNIA_RPC_BATCH_SIZE", 10);
 
 const HTTP_OPTS = {

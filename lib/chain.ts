@@ -77,6 +77,22 @@ export const SOMNIA_LOG_CHUNK = BigInt(envInt("SOMNIA_LOG_CHUNK", 999));
 /** How many eth_getLogs chunks stay in flight. */
 export const SOMNIA_LOG_CONCURRENCY = envInt("SOMNIA_LOG_CONCURRENCY", 8);
 
+/**
+ * Widest history one page render may scan, in blocks.
+ *
+ * Somnia mints roughly a million blocks a day, so a scan anchored to the deploy
+ * block is not a fixed cost — it grows forever. It had already reached 9.6M
+ * blocks, i.e. ~9,600 chunked requests, which is minutes per render: /stats
+ * stopped answering at all and the production build timed out exporting it. The
+ * scans looked cheap only because the chunk size was over the RPC's limit and
+ * every request was failing instantly, so the pages rendered empty.
+ *
+ * A render therefore reads a recent window and no more. Anything older belongs
+ * to the indexer (DREAMDEX_INDEXER_URL) and the settlement projection, which
+ * walk forward from a stored cursor instead of rescanning from genesis.
+ */
+export const SOMNIA_LOG_LOOKBACK = BigInt(envInt("SOMNIA_LOG_LOOKBACK", 250_000));
+
 export function getDeployBlock(): bigint {
   const raw = process.env.NEXT_PUBLIC_DEPLOY_BLOCK;
   if (raw && raw.trim().length > 0) {
@@ -99,8 +115,13 @@ export async function paginatedGetLogs(
 ): Promise<any[]> {
   const end = toBlock ?? (await client.getBlockNumber());
 
+  // Clamp to the recent window: see SOMNIA_LOG_LOOKBACK. Without this the range
+  // count grows with chain age and the caller eventually never returns.
+  const earliest = end > SOMNIA_LOG_LOOKBACK ? end - SOMNIA_LOG_LOOKBACK : 0n;
+  const start0 = fromBlock > earliest ? fromBlock : earliest;
+
   const ranges: Array<{ from: bigint; to: bigint }> = [];
-  for (let start = fromBlock; start <= end; ) {
+  for (let start = start0; start <= end; ) {
     const stop = start + SOMNIA_LOG_CHUNK > end ? end : start + SOMNIA_LOG_CHUNK;
     ranges.push({ from: start, to: stop });
     start = stop + 1n;
