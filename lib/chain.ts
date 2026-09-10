@@ -16,6 +16,8 @@ import {
 import { somniaShannon } from "@somnia-chain/markets-sdk/chains";
 import { privateKeyToAccount } from "viem/accounts";
 
+import { MIMIR_ABI } from "./mimir-abi";
+
 export { somniaShannon };
 
 /** Canonical explorer for Somnia Shannon testnet (viem's own chain definition). */
@@ -92,6 +94,38 @@ export const SOMNIA_LOG_CONCURRENCY = envInt("SOMNIA_LOG_CONCURRENCY", 8);
  * walk forward from a stored cursor instead of rescanning from genesis.
  */
 export const SOMNIA_LOG_LOOKBACK = BigInt(envInt("SOMNIA_LOG_LOOKBACK", 250_000));
+
+/**
+ * Claim-event log scan over the Mimir contract, skipped when there is nothing
+ * to find.
+ *
+ * Every claim event the app scans for — challenged, settled, staked — can only
+ * exist if a claim exists, and claimCount answers that in one read. The VS
+ * venue is empty until a user opens a claim, so on a fresh deployment these
+ * scans were spending the whole lookback window to return nothing: /stats and
+ * /agents took fifteen seconds each to render an empty table. One point read
+ * replaces a few hundred ranged ones, and the moment a claim does exist the
+ * scan runs exactly as before.
+ */
+export async function scanClaimLogs(
+  client: PublicClient,
+  params: Omit<Parameters<PublicClient["getLogs"]>[0], "fromBlock" | "toBlock">,
+  fromBlock: bigint,
+  toBlock?: bigint,
+): Promise<any[]> {
+  try {
+    const claims = (await client.readContract({
+      address: (params as { address: `0x${string}` }).address,
+      abi: MIMIR_ABI,
+      functionName: "claimCount",
+    })) as bigint;
+    if (claims === 0n) return [];
+  } catch {
+    // Unreadable count is not proof of an empty contract — fall through to the
+    // scan rather than reporting no history because one read failed.
+  }
+  return paginatedGetLogs(client, params, fromBlock, toBlock);
+}
 
 export function getDeployBlock(): bigint {
   const raw = process.env.NEXT_PUBLIC_DEPLOY_BLOCK;

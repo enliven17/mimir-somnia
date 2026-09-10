@@ -63,3 +63,61 @@ test("no request exceeds the RPC's 1000-block ceiling", async () => {
     assert.ok(r.to - r.from < 1000n, `range ${r.from}-${r.to} spans ${r.to - r.from}`);
   }
 });
+
+/**
+ * The claim-event scans are guarded by a single cheap read: an empty VS venue
+ * used to cost /stats and /agents a full lookback window to render nothing.
+ */
+test("a claim scan on an empty contract makes no ranged requests", async () => {
+  const { scanClaimLogs } = await import("../../lib/chain");
+  const ranges: unknown[] = [];
+  const client = {
+    getBlockNumber: async () => 1_000_000n,
+    readContract: async () => 0n, // claimCount
+    getLogs: async (args: unknown) => {
+      ranges.push(args);
+      return [];
+    },
+  } as never;
+
+  const logs = await scanClaimLogs(client, { address: "0x0" } as never, 0n);
+  assert.deepEqual(logs, []);
+  assert.equal(ranges.length, 0, "no claims means there is nothing to scan for");
+});
+
+test("a claim scan still runs when claims exist, and when the count is unreadable", async () => {
+  const { scanClaimLogs } = await import("../../lib/chain");
+
+  const withClaims: unknown[] = [];
+  await scanClaimLogs(
+    {
+      getBlockNumber: async () => 1_000_000n,
+      readContract: async () => 3n,
+      getLogs: async (args: unknown) => {
+        withClaims.push(args);
+        return [];
+      },
+    } as never,
+    { address: "0x0" } as never,
+    999_000n,
+  );
+  assert.ok(withClaims.length > 0, "claims exist, so the scan must run");
+
+  // A failed read is not proof of an empty contract.
+  const unreadable: unknown[] = [];
+  await scanClaimLogs(
+    {
+      getBlockNumber: async () => 1_000_000n,
+      readContract: async () => {
+        throw new Error("rpc down");
+      },
+      getLogs: async (args: unknown) => {
+        unreadable.push(args);
+        return [];
+      },
+    } as never,
+    { address: "0x0" } as never,
+    999_000n,
+  );
+  assert.ok(unreadable.length > 0, "an unreadable count must not report an empty history");
+});

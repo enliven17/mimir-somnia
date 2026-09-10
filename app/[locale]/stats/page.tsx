@@ -5,7 +5,7 @@ import {
   getContractAddress,
   getDeployBlock,
   isContractConfigured,
-  paginatedGetLogs,
+  scanClaimLogs,
   weiToStt,
   SOMNIA_EXPLORER_URL,
   getExplorerAddressUrl,
@@ -147,7 +147,7 @@ async function fetchStakersUncached(oracleAddr?: string, creatorAddr?: string): 
   const fromBlock = getDeployBlock();
   try {
     const [created, challenged] = await Promise.all([
-      paginatedGetLogs(client, {
+      scanClaimLogs(client, {
         address,
         event: {
           type: "event",
@@ -159,7 +159,7 @@ async function fetchStakersUncached(oracleAddr?: string, creatorAddr?: string): 
           ],
         } as any,
       }, fromBlock),
-      paginatedGetLogs(client, {
+      scanClaimLogs(client, {
         address,
         event: {
           type: "event",
@@ -242,7 +242,7 @@ async function fetchSettlementsUncached(): Promise<Settlement[]> {
   const client  = createSomniaPublicClient();
   const address = getContractAddress();
   try {
-    const logs = await paginatedGetLogs(client, {
+    const logs = await scanClaimLogs(client, {
       address,
       event: {
         type: "event",

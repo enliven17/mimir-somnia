@@ -7,7 +7,7 @@ import {
   getExplorerTxUrl,
   isContractConfigured,
   weiToStt,
-  paginatedGetLogs,
+  scanClaimLogs,
 } from "@/lib/chain";
 import { unitsToUsdc } from "@/lib/usdc";
 import { cachedFor } from "@/lib/server/ttl-cache";
@@ -53,7 +53,7 @@ async function fetchCouncilStatsUncached(): Promise<PersonaStats[]> {
 
   let challengeLogs: any[] = [];
   try {
-    challengeLogs = await paginatedGetLogs(client, {
+    challengeLogs = await scanClaimLogs(client, {
       address,
       event: {
         type: "event",

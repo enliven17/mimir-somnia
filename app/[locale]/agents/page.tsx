@@ -4,7 +4,7 @@ import {
   getContractAddress,
   getDeployBlock,
   isContractConfigured,
-  paginatedGetLogs,
+  scanClaimLogs,
   weiToStt,
   getExplorerAddressUrl,
   getExplorerTxUrl,
@@ -104,7 +104,7 @@ async function fetchEventsUncached() {
   const fromBlock = getDeployBlock();
   try {
     const [created, challenged, resolved] = await Promise.all([
-      paginatedGetLogs(client, {
+      scanClaimLogs(client, {
         address,
         event: {
           type: "event",
@@ -116,7 +116,7 @@ async function fetchEventsUncached() {
           ],
         } as any,
       }, fromBlock),
-      paginatedGetLogs(client, {
+      scanClaimLogs(client, {
         address,
         event: {
           type: "event",
@@ -128,7 +128,7 @@ async function fetchEventsUncached() {
           ],
         } as any,
       }, fromBlock),
-      paginatedGetLogs(client, {
+      scanClaimLogs(client, {
         address,
         event: {
           type: "event",

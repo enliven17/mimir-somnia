@@ -18,7 +18,7 @@ import {
   getContractAddress,
   getDeployBlock,
   isContractConfigured,
-  paginatedGetLogs,
+  scanClaimLogs,
 } from "@/lib/chain";
 import { unitsToUsdc } from "@/lib/usdc";
 import {
@@ -75,7 +75,7 @@ export async function GET(
 
   let logs: any[] = [];
   try {
-    logs = await paginatedGetLogs(client, {
+    logs = await scanClaimLogs(client, {
       address,
       event: {
         type: "event",
