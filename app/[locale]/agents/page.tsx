@@ -311,17 +311,23 @@ export default async function AgentsPage({
 }: {
   searchParams?: Promise<{ filter?: string | string[]; window?: string | string[] }>;
 }) {
-  const [events, agentInfo, sp] = await Promise.all([
-    fetchEvents(),
-    fetchAgentAddresses(),
-    searchParams ?? Promise.resolve({} as { filter?: string | string[]; window?: string | string[] }),
-  ]);
+  const sp = await (searchParams ??
+    Promise.resolve({} as { filter?: string | string[]; window?: string | string[] }));
   const filter = parseFilter(sp?.filter);
   const rawWindow = Array.isArray(sp?.window) ? sp.window[0] : sp?.window;
   const window: TimeWindow = rawWindow && isTimeWindow(rawWindow) ? rawWindow : "all";
-  // Never let a roster query take the whole page down: the event feed below is the
-  // page's older, independent half and still renders without a database.
-  const roster = await listAgentsWithPerformance(window).catch(() => []);
+
+  // One wait for all three. The roster is a database read and the other two are
+  // chain reads; awaiting the roster separately made the page pay for both
+  // round trips end to end instead of overlapping them.
+  //
+  // The roster catches its own failure: the event feed below is the page's
+  // older, independent half and still renders without a database.
+  const [events, agentInfo, roster] = await Promise.all([
+    fetchEvents(),
+    fetchAgentAddresses(),
+    listAgentsWithPerformance(window).catch(() => []),
+  ]);
   const councilPersonas = getActiveCouncilPersonas();
   const streaks = deriveStreaks(events);
 

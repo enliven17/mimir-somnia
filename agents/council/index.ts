@@ -86,6 +86,8 @@ const PEER_READ_DELAY_MS   = Number(process.env.COUNCIL_PEER_READ_DELAY_MS ?? 15
 const PEER_READ_CAP_USDC   = Number(process.env.COUNCIL_PEER_READ_CAP_USDC ?? "0.003");
 const MARKETS_PER_CYCLE    = Number(process.env.COUNCIL_MAX_MARKETS ?? 2);
 const DREAMDEX_ENABLED     = process.env.COUNCIL_DREAMDEX !== "0";
+/** Mirrors the throttle the persona runners share; used to size the health bar. */
+const LLM_THROTTLE_MS      = Number(process.env.COUNCIL_LLM_THROTTLE_MS ?? 8000);
 const DRY_RUN              = process.env.COUNCIL_DRY_RUN === "1";
 /**
  * Only consider markets with enough life left to survive a cycle.
@@ -472,7 +474,24 @@ async function main(): Promise<void> {
   }
   console.log("═══════════════════════════════════════════════\n");
 
-  const safePoll = () => reportingPoll("council", "council", POLL_INTERVAL_MS / 1000, poll);
+  /**
+   * How far apart the council's heartbeats can legitimately land.
+   *
+   * The beat is written when a cycle finishes, and a cycle is not the poll
+   * interval — it is every persona walking every market in scope, spaced by the
+   * shared LLM throttle. Declaring the bare interval had /api/health calling a
+   * working council critical: 180s declared against a cycle that genuinely took
+   * 27 minutes. Deriving it from the work means changing the persona count or
+   * the market cap moves the bar with it, instead of teaching everyone to
+   * ignore worker alarms.
+   */
+  const cycleBudgetSec = Math.ceil(
+    (ALL_ACTIVE.length * Math.max(1, MARKETS_PER_CYCLE) * LLM_THROTTLE_MS) / 1000,
+  );
+  const expectedIntervalSec = POLL_INTERVAL_MS / 1000 + cycleBudgetSec;
+  console.log(`  Cycle budget   : ~${Math.round(cycleBudgetSec / 60)} min (health bar)`);
+
+  const safePoll = () => reportingPoll("council", "council", expectedIntervalSec, poll);
 
   await safePoll();
   setInterval(safePoll, POLL_INTERVAL_MS);
