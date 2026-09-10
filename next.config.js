@@ -4,6 +4,10 @@ const withNextIntl = createNextIntlPlugin("./i18n/request.ts");
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // /council prerenders from on-chain logs, and 31 build workers share one public
+  // Somnia RPC, so a cold build can sit well past Next's 60s default and fail the
+  // whole export. The page is ISR (revalidate 30), so a slow build is cheap.
+  staticPageGenerationTimeout: 300,
   async headers() {
     return [{
       source: "/:path*",
