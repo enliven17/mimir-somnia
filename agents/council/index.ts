@@ -453,8 +453,15 @@ async function pollClaims(): Promise<number> {
  */
 const PHASE_SPARE_MS = 120_000;
 
-/** Which venue leads this cycle. Flips every poll. */
-let cycleIndex = 0;
+/**
+ * Which venue leads this cycle. Flips every poll.
+ *
+ * Starts on the venue, not the arena. A restart is the one moment the council
+ * is certain to be idle, and the arena's claims keep for hours while a venue
+ * market expires within one — so the first cycle after a deploy is worth
+ * spending where the clock is shortest.
+ */
+let cycleIndex = 1;
 
 /**
  * One cycle over both venues, alternating which one leads.
