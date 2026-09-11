@@ -444,26 +444,66 @@ async function pollClaims(): Promise<number> {
 }
 
 /**
- * One cycle over both venues.
+ * A phase that finishes inside this window leaves room for the other one.
+ *
+ * Deliberately generous: a phase that returns in under two minutes did not
+ * really work — it found nothing in scope, or every persona was already
+ * engaged — so the cycle should spend its remaining time on the other venue
+ * rather than idling until the next tick.
+ */
+const PHASE_SPARE_MS = 120_000;
+
+/** Which venue leads this cycle. Flips every poll. */
+let cycleIndex = 0;
+
+/**
+ * One cycle over both venues, alternating which one leads.
  *
  * The two phases are independent on purpose: a legacy contract with no claims
  * must not stop the council from trading DreamDEX, and a DreamDEX outage must
  * not stop it from answering a VS claim.
+ *
+ * They are not equal in cost, though, and a fixed order starved the second one.
+ * A claim phase is one claim against every persona, each with a decision gap and
+ * its own peer reads, and that alone runs longer than the poll interval — so
+ * while the arena was empty DreamDEX traded fine, and the moment the creator
+ * started writing claims again the venue phase stopped being reached at all.
+ * The symptom was a market page with no council position on it, which reads as
+ * agents that cannot trade rather than agents that never got a turn.
+ *
+ * Alternating gives each venue a whole cycle. A lead phase that returns quickly
+ * hands the rest of its cycle to the other, so a quiet arena still means a busy
+ * venue, exactly as it did before.
  */
 async function poll(): Promise<void> {
-  let stakes = 0;
-  try {
-    stakes += await pollClaims();
-  } catch (err) {
-    console.error("[council] VS phase failed:", err instanceof Error ? err.message : err);
-  }
+  const marketsLead = DREAMDEX_ENABLED && cycleIndex % 2 === 1;
+  cycleIndex += 1;
 
-  if (DREAMDEX_ENABLED) {
+  const claims = async () => {
     try {
-      stakes += await pollMarkets();
+      return await pollClaims();
+    } catch (err) {
+      console.error("[council] VS phase failed:", err instanceof Error ? err.message : err);
+      return 0;
+    }
+  };
+  const markets = async () => {
+    if (!DREAMDEX_ENABLED) return 0;
+    try {
+      return await pollMarkets();
     } catch (err) {
       console.error("[council] DreamDEX phase failed:", err instanceof Error ? err.message : err);
+      return 0;
     }
+  };
+
+  const [lead, follow] = marketsLead ? [markets, claims] : [claims, markets];
+  console.log(`[council] Leading with ${marketsLead ? "DreamDEX" : "VS claims"} this cycle.`);
+
+  const startedAt = Date.now();
+  let stakes = await lead();
+  if (Date.now() - startedAt < PHASE_SPARE_MS) {
+    stakes += await follow();
   }
 
   console.log(
@@ -521,8 +561,17 @@ async function main(): Promise<void> {
 
   const safePoll = () => reportingPoll("council", "council", expectedIntervalSec, poll);
 
-  await safePoll();
-  setInterval(safePoll, POLL_INTERVAL_MS);
+  // Sequential, not setInterval. A cycle regularly outruns the interval — one
+  // claim against twenty personas, each with a decision gap and its own peer
+  // reads — and a timer fires anyway, so cycles overlapped: the same twenty
+  // wallets signing from two or three concurrent passes, competing for nonces
+  // and for the same rate-limited model keys. Waiting for the cycle to finish
+  // and then pausing is the whole fix, and it also makes the alternating phase
+  // above mean what it says.
+  for (;;) {
+    await safePoll();
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+  }
 }
 
 main().catch((err) => {
