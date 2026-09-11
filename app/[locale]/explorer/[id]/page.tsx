@@ -26,7 +26,13 @@ export default async function MarketDetailPage({
 
   const market = await getDreamDexMarket(ref)
     .then((result) => result.market)
-    .catch(() => null);
+    .catch((error: unknown) => {
+      // A missing market is a 404, but an indexer that is merely unreachable is
+      // not — and the two are indistinguishable from the outside unless the
+      // reason is written down here.
+      console.error("[explorer] market lookup failed for", ref, error);
+      return null;
+    });
   if (!market) notFound();
 
   // A market with no database behind it is still a tradeable market.
