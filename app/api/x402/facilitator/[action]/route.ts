@@ -65,8 +65,9 @@ function facilitator(): x402Facilitator {
     );
   }
 
+  const account = privateKeyToAccount(key);
   const client = createWalletClient({
-    account: privateKeyToAccount(key),
+    account,
     chain: somniaShannon,
     transport: http(getSomniaRpcUrl()),
     // Verification reads chain state (balances, used nonces) through the same
@@ -75,7 +76,13 @@ function facilitator(): x402Facilitator {
 
   cached = new x402Facilitator().register(
     X402_NETWORK,
-    new ExactEvmScheme(toFacilitatorEvmSigner(client as never)),
+    new ExactEvmScheme(
+      // The adapter wants a flat `address`; viem keeps it on `account`. Without
+      // it the signer list comes back as [null], and a client rejects the whole
+      // /supported document as malformed rather than reporting a missing
+      // signer — which reads as "this facilitator supports nothing".
+      toFacilitatorEvmSigner(Object.assign(client, { address: account.address }) as never),
+    ),
   );
   return cached;
 }
