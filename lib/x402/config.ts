@@ -10,14 +10,31 @@ import { parseUsdcAtomic, USDC_ADDRESS } from "../usdc";
 
 export const X402_NETWORK = (process.env.X402_NETWORK?.trim() || SOMNIA_CAIP2) as `${string}:${string}`;
 export const X402_SCHEME = "exact";
-export const X402_ASSET = USDC_ADDRESS;
+/**
+ * What payments settle in.
+ *
+ * Not the venue's collateral: that is a plain ERC-20 with no EIP-3009, no
+ * permit and no Permit2 on this chain, so x402's `exact` scheme has no way to
+ * move it by signature and every paid route failed to initialise. MimirPayUSD
+ * exists for exactly this, and keeping it separate also keeps a position's
+ * denomination out of the price of a read.
+ */
+export const X402_ASSET = (process.env.NEXT_PUBLIC_PAY_TOKEN_ADDRESS?.trim() ||
+  process.env.PAY_TOKEN_ADDRESS?.trim() ||
+  USDC_ADDRESS) as `0x${string}`;
 
 /**
- * Facilitator that verifies and settles payments. x402.org needs no signup and
- * is fine for testnet; staging/production should point at CDP.
+ * Facilitator that verifies and settles payments.
+ *
+ * x402.org does not know this chain — it answers `Facilitator does not support
+ * scheme "exact" on network "eip155:50312"`, which fails every paid route at
+ * initialisation. Mimir therefore runs its own at /api/x402/facilitator; see
+ * that route for why being both seller and facilitator is a caveat rather than
+ * a detail.
  */
 export const X402_FACILITATOR_URL =
-  process.env.X402_FACILITATOR_URL?.trim() || "https://x402.org/facilitator";
+  process.env.X402_FACILITATOR_URL?.trim() ||
+  `${process.env.MIMIR_APP_URL?.trim() || "http://localhost:3000"}/api/x402/facilitator`;
 
 /** Default seller — usually the oracle wallet. Persona routes override per-request. */
 export function sellerAddress(payTo?: string): `0x${string}` {
