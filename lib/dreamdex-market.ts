@@ -241,7 +241,15 @@ async function loadedMarkets(reload = false): Promise<Record<string, UnifiedMark
   const exchange = getReadExchange();
   if (reload) marketLoad = null;
   if (!marketLoad) {
-    marketLoad = exchange.loadMarkets().catch((error: unknown) => {
+    marketLoad = exchange
+      .loadMarkets()
+      .then((markets) => {
+        // Once per process, so it is a startup fact rather than request noise —
+        // and the one number that separates "no markets" from "no indexer".
+        console.log(`[dreamdex] loadMarkets: ${Object.keys(markets).length} market(s)`);
+        return markets;
+      })
+      .catch((error: unknown) => {
       // Every caller above this turns a failure into an empty page — zero live
       // markets, a 404 on a market that exists — so the reason has to be logged
       // here or it is lost, and a dead indexer looks exactly like a dead venue.
