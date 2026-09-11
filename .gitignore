@@ -101,3 +101,6 @@ artifacts/
 graphify-out/
 artifacts/
 mimir-logo-preview.png
+
+# Compiled contract artifacts — reproduce with scripts/compile-contract.mjs
+deploy/artifacts/

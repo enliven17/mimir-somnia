@@ -400,6 +400,59 @@ contract MimirV2 {
         nonReentrant
         returns (uint256 id)
     {
+        return _createClaim(params);
+    }
+
+    /**
+     * Open a fresh claim carrying the same question as an existing one.
+     *
+     * Everything that describes the market — the question, both positions, the
+     * resolution source and the settlement rule — is copied from the parent, so
+     * a rematch cannot quietly restate the terms the parent was argued under.
+     * Only the deadline, the stake and the invite key are the caller's to set,
+     * and `parentId` records the lineage.
+     *
+     * The fee snapshot is taken fresh, not inherited: a rematch is a new market
+     * whose participants commit under the policy in force now.
+     */
+    function createRematch(
+        uint256 parentId,
+        uint256 deadline,
+        uint256 stakeAmount,
+        string  calldata inviteKey
+    ) external nonReentrant returns (uint256 id) {
+        Claim storage parent = claims[parentId];
+        require(parent.creator != address(0), "Mimir: parent not found");
+
+        return _createClaim(CreateParams({
+            question:            parent.question,
+            creatorPosition:     parent.creatorPosition,
+            counterPosition:     parent.counterPosition,
+            resolutionUrl:       parent.resolutionUrl,
+            deadline:            deadline,
+            stakeAmount:         stakeAmount,
+            category:            parent.category,
+            parentId:            parentId,
+            marketType:          parent.marketType,
+            oddsMode:            parent.oddsMode,
+            challengerPayoutBps: parent.challengerPayoutBps,
+            handicapLine:        parent.handicapLine,
+            settlementRule:      parent.settlementRule,
+            maxChallengers:      parent.maxChallengers,
+            isPrivate:           parent.isPrivate,
+            inviteKey:           inviteKey,
+            contextHash:         parent.contextHash,
+            // Attribution follows the lineage: a rematch of an agent's market is
+            // still that agent's market.
+            agentOwnerRecipient: parent.fees.agentOwnerRecipient
+        }));
+    }
+
+    /**
+     * The shared create path. Taking `memory` rather than `calldata` is what
+     * lets createRematch reuse it with params it assembled from a parent.
+     */
+    function _createClaim(CreateParams memory params) internal returns (uint256 id) {
         require(params.stakeAmount >= MIN_STAKE, "Mimir: stake too small");
         require(params.deadline > block.timestamp, "Mimir: deadline in past");
         require(bytes(params.question).length > 0, "Mimir: empty question");
