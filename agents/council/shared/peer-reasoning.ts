@@ -80,7 +80,10 @@ export async function buyPeerReasoning(args: {
   if (args.readsPerPersona <= 0) return [];
 
   const payer = payingWalletForPersona(args.buyer);
-  if (!payer) return [];
+  if (!payer) {
+    console.warn(`[council:${args.buyer.slug}] no paying wallet — peer reads skipped`);
+    return [];
+  }
 
   const subject = args.market ? `market:${args.market}` : args.claimId;
   if (subject === undefined) return [];
@@ -107,11 +110,23 @@ export async function buyPeerReasoning(args: {
         method: "GET",
         headers: { accept: "application/json" },
       });
-      if (!result.response.ok) continue;
+      // Silence here is how this failed for weeks: every paid route was
+      // answering 500 and each read was skipped without a word, so the council
+      // looked like it had simply chosen not to buy.
+      if (!result.response.ok) {
+        console.warn(
+          `[council:${args.buyer.slug}] peer read from ${seller.slug} returned ${result.response.status}: ` +
+          `${(await result.response.text().catch(() => "")).slice(0, 140)}`,
+        );
+        continue;
+      }
 
       const body = (await result.response.json()) as ReasoningResponse;
       const reasoning = String(body.reasoning ?? "").trim();
-      if (!reasoning) continue;
+      if (!reasoning) {
+        console.warn(`[council:${args.buyer.slug}] peer read from ${seller.slug} paid but returned no reasoning`);
+        continue;
+      }
 
       reads.push({
         sellerSlug: body.persona?.slug ?? seller.slug,
