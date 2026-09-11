@@ -23,6 +23,7 @@ const TOC_SECTIONS = [
   { id: "overview", title: "What Mimir is" },
   { id: "network", title: "Network and addresses" },
   { id: "venues", title: "Two venues" },
+  { id: "dreamdex", title: "Inside DreamDEX" },
   { id: "market-lifecycle", title: "Life of a market" },
   { id: "agents", title: "The agent fabric" },
   { id: "council", title: "How the council decides" },
@@ -215,6 +216,75 @@ function VenuesDiagram() {
       <text x="386" y="160" className={MUTED} fontSize="11">• a user states a position</text>
       <text x="386" y="180" className={MUTED} fontSize="11">• others join the challenger side</text>
       <text x="386" y="200" className={MUTED} fontSize="11">• settled by the Mimir oracle</text>
+    </svg>
+  );
+}
+
+/**
+ * How one unit of collateral becomes two tradeable outcomes and comes back.
+ *
+ * The loop is the whole point of a complete-set venue and the thing most people
+ * get wrong about it: nobody "issues" YES against NO. One unit of collateral is
+ * split into one YES and one NO, the two are traded independently on their own
+ * books, and at settlement the winning side redeems for that same unit. The
+ * collateral never leaves the market — which is why the two prices sum to one,
+ * and why a market can never pay out more than was put in.
+ */
+function DreamDexDiagram() {
+  return (
+    <svg viewBox="0 0 660 430" className="h-auto w-full min-w-[600px]" role="img"
+      aria-label="One unit of collateral mints a complete set of YES and NO shares, each trades on its own order book, and at settlement the winning side redeems for the collateral">
+      <Arrow />
+
+      {/* Mint */}
+      <rect x="250" y="10" width="160" height="46" rx="4" className={BOX_ACCENT} strokeWidth="1" />
+      <text x="330" y="31" textAnchor="middle" className={LABEL} fontSize="12">1 collateral (USDC)</text>
+      <text x="330" y="48" textAnchor="middle" className={MUTED} fontSize="10">mint a complete set</text>
+
+      <line x1="300" y1="56" x2="175" y2="92" className={LINE} markerEnd="url(#doc-arrow)" />
+      <line x1="360" y1="56" x2="485" y2="92" className={LINE} markerEnd="url(#doc-arrow)" />
+
+      {/* The two outcome tokens */}
+      <rect x="60" y="94" width="230" height="44" rx="4" className={BOX} strokeWidth="1" />
+      <text x="175" y="114" textAnchor="middle" className={LABEL} fontSize="12">1 YES share</text>
+      <text x="175" y="130" textAnchor="middle" className={MUTED} fontSize="10">SYMBOL#YES</text>
+
+      <rect x="370" y="94" width="230" height="44" rx="4" className={BOX} strokeWidth="1" />
+      <text x="485" y="114" textAnchor="middle" className={LABEL} fontSize="12">1 NO share</text>
+      <text x="485" y="130" textAnchor="middle" className={MUTED} fontSize="10">SYMBOL#NO</text>
+
+      <line x1="175" y1="138" x2="175" y2="166" className={LINE} markerEnd="url(#doc-arrow)" />
+      <line x1="485" y1="138" x2="485" y2="166" className={LINE} markerEnd="url(#doc-arrow)" />
+
+      {/* Independent books */}
+      <rect x="60" y="168" width="230" height="92" rx="4" className={BOX} strokeWidth="1" />
+      <text x="175" y="190" textAnchor="middle" className={LABEL} fontSize="12">YES order book</text>
+      <text x="76" y="212" className={MUTED} fontSize="10">• bids and asks, on chain</text>
+      <text x="76" y="230" className={MUTED} fontSize="10">• price in (0, 1) on a tick grid</text>
+      <text x="76" y="248" className={MUTED} fontSize="10">• size on a lot grid</text>
+
+      <rect x="370" y="168" width="230" height="92" rx="4" className={BOX} strokeWidth="1" />
+      <text x="485" y="190" textAnchor="middle" className={LABEL} fontSize="12">NO order book</text>
+      <text x="386" y="212" className={MUTED} fontSize="10">• independent of the YES book</text>
+      <text x="386" y="230" className={MUTED} fontSize="10">• arbitrage keeps YES + NO ≈ 1</text>
+      <text x="386" y="248" className={MUTED} fontSize="10">• last trade is the probability</text>
+
+      <line x1="175" y1="260" x2="290" y2="292" className={LINE} markerEnd="url(#doc-arrow)" />
+      <line x1="485" y1="260" x2="370" y2="292" className={LINE} markerEnd="url(#doc-arrow)" />
+
+      {/* Expiry and resolution */}
+      <rect x="215" y="294" width="230" height="46" rx="4" className={BOX} strokeWidth="1" />
+      <text x="330" y="315" textAnchor="middle" className={LABEL} fontSize="12">expiry → oracle resolves</text>
+      <text x="330" y="332" textAnchor="middle" className={MUTED} fontSize="10">payout numerators fixed on chain</text>
+
+      <line x1="330" y1="340" x2="330" y2="366" className={LINE} markerEnd="url(#doc-arrow)" />
+
+      {/* Redeem */}
+      <rect x="215" y="368" width="230" height="46" rx="4" className={BOX_ACCENT} strokeWidth="1" />
+      <text x="330" y="389" textAnchor="middle" className={LABEL} fontSize="12">winning share → 1 collateral</text>
+      <text x="330" y="406" textAnchor="middle" className={MUTED} fontSize="10">losing share → 0; a void pays both 0.5</text>
+
+      <text x="20" y="292" className={MUTED} fontSize="10">merge: 1 YES + 1 NO → 1 collateral, any time</text>
     </svg>
   );
 }
@@ -539,12 +609,74 @@ export default function DocsPage() {
             </p>
           </Section>
 
+          <Section id="dreamdex">
+            <p>
+              DreamDEX is Somnia&apos;s own event-contract venue, reached through{" "}
+              <Code>@somnia-chain/markets-sdk</Code>. Mimir does not run an exchange: it
+              opens markets there, trades them from agent wallets, and reads them back
+              through the protocol&apos;s indexer. Understanding one mechanism explains most
+              of what the interface shows.
+            </p>
+            <p>
+              A binary market has no issuer taking the other side. One unit of collateral is
+              split into a <em>complete set</em> — one YES share and one NO share — and the
+              two trade independently. At settlement the winning share redeems for that same
+              unit and the losing one for nothing. The collateral never leaves the market,
+              which is why the two prices sum to about one, and why a market can never pay
+              out more than was put in.
+            </p>
+            <Figure caption="Figure 2 — collateral in, two outcomes traded, collateral back out">
+              <DreamDexDiagram />
+            </Figure>
+            <p>
+              Because the set can be minted and merged at will, arbitrage pins the pair: if
+              YES trades at 0.62, NO cannot hold above 0.38 for long, because anyone can mint
+              a set for 1 and sell both legs for more. That is what makes the last traded
+              price readable as a probability rather than as a quote.
+            </p>
+            <Table
+              head={["Term", "What it is"]}
+              rows={[
+                [<Code key="s">SYMBOL</Code>, "the market, e.g. BTC-0-12SEP26/tUSDC — asset, strike index, expiry date, collateral"],
+                [<Code key="o">SYMBOL#YES</Code>, "one of the two outcome legs; each leg has its own book"],
+                ["market id", "the stable identity (a bytes32). Pool addresses can be recycled, ids cannot"],
+                ["tick grid", "the allowed price increments in (0, 1). An off-grid price reverts"],
+                ["lot grid", "the allowed size increments. Sizes are floored onto it"],
+                ["status", "Trading, Expired, Settled — the venue reports Trading until it settles, past expiry"],
+              ]}
+            />
+            <p>
+              Two consequences show up everywhere in this codebase. First, the venue takes a{" "}
+              <em>share quantity</em>, never a collateral amount — you divide what you want
+              to spend by the best ask to get the size, which is Figure 6. Second, every
+              order must land on both grids, so Mimir places tick-snapped
+              immediate-or-cancel limit orders rather than market orders; the SDK&apos;s
+              market type does not snap, and reverts with an invalid-price error against a
+              real book.
+            </p>
+            <p>
+              Market creation is a rolling series rather than a one-off call. A configured
+              creator arms a cadence and the protocol mints each next event market at the
+              interval boundary, which is why new BTC and ETH questions keep appearing
+              without anyone drafting them. Mimir&apos;s own market-creator writes its
+              AI-drafted questions to the Mimir contract instead, because a venue series
+              ignores the text it is handed.
+            </p>
+            <p>
+              Reads go through the indexer, not the chain: the market registry, the books,
+              trade history and volume all come from one GraphQL endpoint. Mimir caches that
+              snapshot for a minute. Longer is tempting and wrong — the series rolls
+              continuously, so a stale snapshot offers markets that have already settled and
+              404s the ones created since.
+            </p>
+          </Section>
+
           <Section id="market-lifecycle">
             <p>
               Every market walks the same path. Only the middle stage takes orders, which is
               the stage worth watching.
             </p>
-            <Figure caption="Figure 2 — the stages of a binary market">
+            <Figure caption="Figure 3 — the stages of a binary market">
               <LifecycleDiagram />
             </Figure>
             <Steps
@@ -571,7 +703,7 @@ export default function DocsPage() {
               chain: no queue, no bus, no leader. If one dies the others keep working, and
               the one that died re-reads its state from the chain when it comes back.
             </p>
-            <Figure caption="Figure 3 — the workers, the chain, and the one worker that writes Postgres">
+            <Figure caption="Figure 4 — the workers, the chain, and the one worker that writes Postgres">
               <AgentsDiagram />
             </Figure>
             <Table
@@ -600,7 +732,7 @@ npm run oracle    # just the oracle`}</Block>
               and ten philosophers. Each one holds its own key, funds its own bets, and is
               graded on its own record.
             </p>
-            <Figure caption="Figure 4 — a persona's decision path, from filter to order">
+            <Figure caption="Figure 5 — a persona's decision path, from filter to order">
               <CouncilDiagram />
             </Figure>
             <Sub>Four archetypes</Sub>
@@ -647,7 +779,7 @@ npm run oracle    # just the oracle`}</Block>
               <em>quantity of shares</em>, not an amount of collateral. Converting between
               them is what the ask price is for.
             </p>
-            <Figure caption="Figure 5 — turning collateral into a bounded market buy">
+            <Figure caption="Figure 6 — turning collateral into a bounded market buy">
               <OrderDiagram />
             </Figure>
             <Steps
@@ -763,7 +895,7 @@ CREATOR_PRIVATE_KEY             # market creation`}</Block>
               The chain is the record. Everything else is a cache with a job: be fast enough
               to render a page.
             </p>
-            <Figure caption="Figure 6 — what a page is allowed to read">
+            <Figure caption="Figure 7 — what a page is allowed to read">
               <DataDiagram />
             </Figure>
             <Table
