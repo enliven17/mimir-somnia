@@ -159,9 +159,29 @@ Write one tight paragraph (max 90 words): which side you lean toward and your ho
   });
 }
 
-// Dynamic payTo: each persona is paid into its own wallet. A council pass
-// bypasses the paywall entirely.
-export const GET = paidRoute("councilReasoning", handler, {
+/**
+ * Reject an unknown persona before the paywall, not after.
+ *
+ * The payTo resolver runs first and throws when a slug has no wallet, so a
+ * typo in a query string came back 500 — and once a fallback recipient is in
+ * play it would instead demand payment for a seat that does not exist. Neither
+ * is an answer. This is a trust boundary: validate, then charge.
+ */
+function personaGuard(slug: string): NextResponse | null {
+  if (getCouncilPersonaBySlug(slug)) return null;
+  return NextResponse.json({ error: `unknown persona '${slug}'` }, { status: 400 });
+}
+
+const paidGet = paidRoute("councilReasoning", handler, {
+  // Dynamic payTo: each persona is paid into its own wallet. A council pass
+  // bypasses the paywall entirely.
   payTo: personaAddress,
   skipPayment: hasCouncilPass,
 });
+
+export async function GET(req: NextRequest): Promise<NextResponse> {
+  return (
+    personaGuard(req.nextUrl.searchParams.get("persona") ?? "") ??
+    (await paidGet(req))
+  );
+}

@@ -228,5 +228,25 @@ Omit a dimension rather than guessing at it. Favor clear, verifiable, balanced m
   });
 }
 
+/**
+ * Reject an unknown persona before the paywall, not after.
+ *
+ * The payTo resolver runs first and throws when a slug has no wallet, so a
+ * typo in a query string came back 500 — and once a fallback recipient is in
+ * play it would instead demand payment for a seat that does not exist. Neither
+ * is an answer. This is a trust boundary: validate, then charge.
+ */
+function personaGuard(slug: string): NextResponse | null {
+  if (getCouncilPersonaBySlug(slug)) return null;
+  return NextResponse.json({ error: `unknown persona '${slug}'` }, { status: 400 });
+}
+
 // Dynamic payTo: each persona is paid into its own wallet.
-export const POST = paidRoute("councilPreflight", handler, { payTo: personaAddress });
+const paidPost = paidRoute("councilPreflight", handler, { payTo: personaAddress });
+
+export async function POST(req: NextRequest): Promise<NextResponse> {
+  return (
+    personaGuard(req.nextUrl.searchParams.get("persona") ?? "") ??
+    (await paidPost(req))
+  );
+}
