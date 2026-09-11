@@ -2333,21 +2333,35 @@ export async function recordVenuePosition(row: VenuePositionRow): Promise<void> 
   });
 }
 
-/** Newest first. `agentIds` narrows to one roster; omit it for everything. */
+/**
+ * Newest first. `agentIds` narrows to one roster; `marketRef` to a single venue
+ * market, which is what a market detail page needs — otherwise it would pull the
+ * whole table across the wire to filter one symbol in the browser.
+ */
 export async function listVenuePositions(
-  options: { agentIds?: string[]; limit?: number } = {},
+  options: { agentIds?: string[]; marketRef?: string; limit?: number } = {},
 ): Promise<VenuePositionRow[]> {
   const pool = await getDb();
   const limit = options.limit ?? 200;
   const ids = options.agentIds?.filter(Boolean) ?? null;
   if (ids && ids.length === 0) return [];
 
-  const where = ids ? `WHERE agent_id IN (${ids.map((_, i) => `$${i + 1}`).join(", ")})` : "";
+  const args: string[] = [];
+  const clauses: string[] = [];
+  if (ids) {
+    clauses.push(`agent_id IN (${ids.map((_, i) => `$${args.length + i + 1}`).join(", ")})`);
+    args.push(...ids);
+  }
+  if (options.marketRef) {
+    clauses.push(`market_ref = $${args.length + 1}`);
+    args.push(options.marketRef);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const { rows } = await execute(pool, {
     sql: `SELECT tx_hash, agent_id, track, market_ref, question, outcome,
       stake_usdc, quantity, price, confidence, rationale, created_at
       FROM venue_positions ${where} ORDER BY created_at DESC LIMIT ${Number(limit)}`,
-    args: ids ?? [],
+    args,
   });
 
   return rows.map((raw) => {

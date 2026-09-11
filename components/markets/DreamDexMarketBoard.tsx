@@ -217,18 +217,27 @@ export default function DreamDexMarketBoard({
   }
 
   return (
-    <div className="mx-auto max-w-[1240px] space-y-5 px-4 py-8 sm:px-6 lg:px-8">
+    // Focused mode is embedded under a page that already states the question and
+    // owns the outer gutter, so the board drops its own hero rather than printing
+    // the same headline twice, one size smaller.
+    <div className={focusOne ? "space-y-5" : "mx-auto max-w-[1240px] space-y-5 px-4 py-8 sm:px-6 lg:px-8"}>
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
         <div>
           <p className="font-mono text-[11px] font-bold uppercase tracking-[0.2em] text-pv-emerald">DreamDEX market</p>
-          <h1 className="mt-2 font-display text-3xl font-bold tracking-tight text-pv-text">
-            {focusOne ? (selected?.question || selected?.symbol || "Loading market…") : "Trade live event contracts"}
-          </h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-pv-muted">
-            {focusOne
-              ? "Inspect the YES/NO book and execute with your connected wallet."
-              : "Discover indexed binary markets, inspect the YES/NO book, and execute with your connected wallet."}
-          </p>
+          {focusOne ? (
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-pv-muted">
+              Inspect the YES/NO book and execute with your connected wallet.
+            </p>
+          ) : (
+            <>
+              <h1 className="mt-2 font-display text-3xl font-bold tracking-tight text-pv-text">
+                Trade live event contracts
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-pv-muted">
+                Discover indexed binary markets, inspect the YES/NO book, and execute with your connected wallet.
+              </p>
+            </>
+          )}
         </div>
         {focusOne ? (
           <Link href="/explorer" className="btn-compact-secondary self-start sm:self-auto">Back to explorer</Link>
