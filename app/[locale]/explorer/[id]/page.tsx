@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 
 import DreamDexMarketBoard from "@/components/markets/DreamDexMarketBoard";
 import CouncilMarketBets from "@/components/markets/CouncilMarketBets";
-import { getDreamDexMarket, loadDreamDexMarkets } from "@/lib/dreamdex-market";
+import { getDreamDexMarket } from "@/lib/dreamdex-market";
 import { listVenuePositions, type VenuePositionRow } from "@/lib/db";
 
 export const metadata: Metadata = {
@@ -26,18 +26,11 @@ export default async function MarketDetailPage({
 
   const market = await getDreamDexMarket(ref)
     .then((result) => result.market)
-    .catch(async (error: unknown) => {
-      // A missing market is a 404, but an indexer that is merely unreachable is
-      // not — and the two are indistinguishable from the outside unless the
-      // reason is written down here. The ids come along because "not found"
-      // against a venue that holds the market means the two disagree about what
-      // an id is, which the error alone never says.
-      const known = await loadDreamDexMarkets({ includeInactive: true }).catch(() => []);
-      console.error(
-        "[explorer] market lookup failed for", ref,
-        `(venue knows ${known.length}: ${known.slice(0, 3).map((m) => m.id).join(", ")})`,
-        error,
-      );
+    .catch((error: unknown) => {
+      // A market the venue has rolled past and an indexer that is merely
+      // unreachable both end up here as a 404, and they are indistinguishable
+      // from the outside unless the reason is written down.
+      console.error("[explorer] market lookup failed for", ref, error);
       return null;
     });
   if (!market) notFound();

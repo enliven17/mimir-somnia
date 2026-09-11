@@ -232,6 +232,20 @@ function toBalance(code: string, balance: UnifiedBalances[string]): DreamDexBala
 
 let readExchange: ReturnType<typeof createExchange> | null = null;
 let marketLoad: Promise<Record<string, UnifiedMarket>> | null = null;
+let marketLoadedAt = 0;
+
+/**
+ * How long a market snapshot stays usable.
+ *
+ * The venue rolls its series continuously: markets expire and new ones appear
+ * every few minutes. Caching the snapshot for the life of the process meant a
+ * long-running web container answered from an hour-old list — expired markets on
+ * the explorer, a 404 on every market created since boot, and a "live markets"
+ * count that decayed to zero while the venue was busy. One minute is short
+ * enough to track the roll and long enough that a burst of readers costs one
+ * indexer round trip.
+ */
+const MARKET_TTL_MS = 60_000;
 
 function getReadExchange() {
   return (readExchange ??= createExchange());
@@ -239,26 +253,22 @@ function getReadExchange() {
 
 async function loadedMarkets(reload = false): Promise<Record<string, UnifiedMarket>> {
   const exchange = getReadExchange();
-  if (reload) marketLoad = null;
+  if (reload || Date.now() - marketLoadedAt > MARKET_TTL_MS) marketLoad = null;
   if (!marketLoad) {
+    marketLoadedAt = Date.now();
     marketLoad = exchange
       .loadMarkets()
-      .then((markets) => {
-        // Once per process, so it is a startup fact rather than request noise —
-        // and the one number that separates "no markets" from "no indexer".
-        console.log(`[dreamdex] loadMarkets: ${Object.keys(markets).length} market(s)`);
-        return markets;
-      })
       .catch((error: unknown) => {
-      // Every caller above this turns a failure into an empty page — zero live
-      // markets, a 404 on a market that exists — so the reason has to be logged
-      // here or it is lost, and a dead indexer looks exactly like a dead venue.
-      console.error("[dreamdex] loadMarkets failed:", error);
-      // A transient indexer/RPC outage must not poison every later request in
-      // this process with the same rejected promise.
-      marketLoad = null;
-      throw error;
-    });
+        // Every caller above this turns a failure into an empty page — zero live
+        // markets, a 404 on a market that exists — so the reason has to be logged
+        // here or it is lost, and a dead indexer looks exactly like a dead venue.
+        console.error("[dreamdex] loadMarkets failed:", error);
+        // A transient indexer/RPC outage must not poison every later request in
+        // this process with the same rejected promise.
+        marketLoad = null;
+        marketLoadedAt = 0;
+        throw error;
+      });
   }
   return marketLoad;
 }
