@@ -20,6 +20,7 @@ import { COLLATERAL, DREAMDEX_NETWORK } from "../../lib/dreamdex";
 import { ERC20_ABI, unitsToUsdc } from "../../lib/usdc";
 import { callLLM, activeLLMModel, activeLLMProvider, extractJson, pickGeminiModel } from "../../lib/llm";
 import { reportingPoll } from "../../lib/ops/heartbeat";
+import { recordVenuePosition } from "../../lib/db";
 import { AUTHORITY_LEVELS, defaultLimits, REGISTRY_SCHEMA_VERSION, type AgentRecord } from "../../lib/agents/registry";
 import { loadAgent, saveAgent } from "../../lib/agents/store";
 import { TRADER_PERSONAS, isTraderVerdict, shouldStake, type TraderPersona, type TraderVerdict } from "./personas";
@@ -213,9 +214,34 @@ async function runTrader(persona: TraderPersona): Promise<void> {
           continue;
         }
         const order = await exchange.createOrder(symbol, "limit", "buy", quantity, price, { timeInForce: "IOC" });
+        const txHash = order.txHash ?? order.id ?? "";
         console.log(
-          `[traders]   bought ${outcome} on ${market.symbol} · ${quantity.toFixed(4)} @ ${price.toFixed(4)} · ${order.txHash ?? order.id}`,
+          `[traders]   bought ${outcome} on ${market.symbol} · ${quantity.toFixed(4)} @ ${price.toFixed(4)} · ${txHash}`,
         );
+        if (txHash) {
+          // Same reason the council records its fills: a DreamDEX position
+          // leaves no trace on the Mimir contract, which is all the site could
+          // read, so a working trader looked idle.
+          await recordVenuePosition({
+            txHash,
+            agentId: persona.agentId,
+            track: "trader",
+            marketRef: market.symbol,
+            question: market.question,
+            outcome,
+            stakeUsdc: persona.stakeUsdc,
+            quantity,
+            price,
+            confidence: decision.confidence,
+            rationale: decision.reasoning,
+            createdAt: Date.now(),
+          }).catch((err) => {
+            console.warn(
+              `[traders]   position recorded on chain but not in the database:`,
+              err instanceof Error ? err.message.slice(0, 100) : err,
+            );
+          });
+        }
         traded += 1;
       } catch (error) {
         console.warn(`[traders]   ${market.symbol} order failed:`, error instanceof Error ? error.message : error);

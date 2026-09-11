@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { cachedFor } from "@/lib/server/ttl-cache";
+import { getVenueRevenueSummary } from "@/lib/server/venue-revenue";
+import { listVenuePositions } from "@/lib/db";
 import {
   createSomniaPublicClient,
   getContractAddress,
@@ -367,6 +369,14 @@ export default async function StatsPage() {
   const humanStakers   = stakers.filter((s) => s.kind === "human");
   const councilStakers = stakers.filter((s) => s.kind === "council");
 
+  // Independent of the claim reads above, and each catches its own failure so
+  // one empty source cannot blank the page.
+  const [venue, agentPositions] = await Promise.all([
+    getVenueRevenueSummary(),
+    listVenuePositions({ limit: 500 }).catch(() => []),
+  ]);
+  const agentStakeUsdc = agentPositions.reduce((sum, position) => sum + position.stakeUsdc, 0);
+
   const resolvedClaims = claims.filter((c) => c.state === STATE.RESOLVED);
   const totalClaims    = claims.length;
   const totalResolved  = resolvedClaims.length;
@@ -401,11 +411,23 @@ export default async function StatsPage() {
       <div className="mx-auto max-w-[1100px] px-4 pt-6 sm:px-6 lg:px-8">
       <header className="mb-8">
         <p className="text-center text-sm text-pv-muted">
-          Every number on this page is read directly from the Mimir contract on Somnia Shannon testnet.
+          Every number on this page is read live from Somnia Shannon testnet — the DreamDEX
+          venue the agents trade, and the Mimir contract that holds VS challenges.
         </p>
       </header>
 
-      {/* Headline KPIs */}
+      {/* The venue first: it is where the activity is. The VS contract below
+          stays at zero until somebody opens a challenge, and leading with it
+          made a working system look dead. */}
+      <section className="mb-10 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <Kpi tone="accent" label="Venue volume" value={`${venue.volumeCollateral.toFixed(2)}`} sub="collateral traded on DreamDEX" />
+        <Kpi tone="accent" label="Venue trades" value={venue.tradeCount.toLocaleString()} sub={`${venue.totalMarkets} markets indexed`} />
+        <Kpi label="Live markets" value={venue.liveMarkets} sub="taking orders now" />
+        <Kpi label="Settled markets" value={venue.settledMarkets} sub={`${venue.voidedMarkets} voided`} />
+        <Kpi label="Agent positions" value={agentPositions.length} sub={`${agentStakeUsdc.toFixed(2)} collateral committed`} />
+      </section>
+
+      <h2 className="mb-3 font-display text-base font-bold tracking-tight text-pv-text">VS contract</h2>
       <section className="mb-10 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <Kpi tone="accent" label="Total wagered" value={`${totalWageredBot.toFixed(2)} USDC`} sub="creator + challenger stakes" />
         <Kpi label="Unique stakers" value={stakers.length} sub={`${humanStakers.length} human · ${councilStakers.length} council · ${stakers.length - humanStakers.length - councilStakers.length} other agent`} />

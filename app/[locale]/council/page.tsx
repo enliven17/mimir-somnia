@@ -11,6 +11,7 @@ import {
 } from "@/lib/chain";
 import { unitsToUsdc } from "@/lib/usdc";
 import { cachedFor } from "@/lib/server/ttl-cache";
+import { listVenuePositions, type VenuePositionRow } from "@/lib/db";
 import {
   getActiveCouncilPersonas,
 } from "@/lib/council-resolver";
@@ -124,8 +125,9 @@ const ARCHETYPE_LABEL: Record<PersonaSpec["archetype"], string> = {
   "micro":       "Micro · low threshold",
 };
 
-function PersonaCard({ stats }: { stats: PersonaStats }) {
+function PersonaCard({ stats }: { stats: PersonaStats & { venuePositions?: VenuePositionRow[] } }) {
   const { persona, address, balanceEth, stakesPlaced, totalStakedUsdc, recentBets } = stats;
+  const venuePositions = stats.venuePositions ?? [];
   const active = stakesPlaced > 0;
 
   return (
@@ -191,6 +193,45 @@ function PersonaCard({ stats }: { stats: PersonaStats }) {
       </dl>
 
       <div className="min-h-[3.25rem]">
+      {venuePositions.length > 0 && (
+        <ul className="space-y-2 border-t border-pv-border/30 pt-3">
+          {venuePositions.slice(0, 3).map((position) => (
+            <li key={position.txHash} className="space-y-1">
+              <div className="flex items-baseline justify-between gap-2 font-mono text-[10px]">
+                <span
+                  className={
+                    position.outcome === "YES"
+                      ? "font-bold text-pv-emerald"
+                      : "font-bold text-pv-gold"
+                  }
+                >
+                  {position.outcome}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-pv-muted">{position.marketRef}</span>
+                <span className="tabular-nums text-pv-text/85">
+                  {position.stakeUsdc.toFixed(2)} @ {position.price.toFixed(3)}
+                </span>
+                <a
+                  href={getExplorerTxUrl(position.txHash)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-pv-muted hover:text-pv-emerald"
+                >
+                  tx ↗
+                </a>
+              </div>
+              {/* The reasoning is the product here, not a footnote: it is what
+                  separates a persona from a bot with a wallet. */}
+              {position.rationale && (
+                <p className="line-clamp-2 text-[10px] leading-4 text-pv-muted">
+                  {position.rationale}
+                </p>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
       {recentBets.length > 0 ? (
         <ul className="space-y-1.5 border-t border-pv-border/30 pt-3">
           {recentBets.map((b) => (
@@ -210,11 +251,11 @@ function PersonaCard({ stats }: { stats: PersonaStats }) {
             </li>
           ))}
         </ul>
-      ) : (
+      ) : venuePositions.length === 0 ? (
         <p className="border-t border-pv-border/30 pt-3 text-center font-mono text-[10px] italic text-pv-muted">
-          no bets yet — waiting for an in-character market
+          no positions yet — waiting for an in-character market
         </p>
-      )}
+      ) : null}
       </div>
 
       <div className="flex justify-center">
@@ -227,7 +268,31 @@ function PersonaCard({ stats }: { stats: PersonaStats }) {
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default async function CouncilPage() {
-  const stats = await fetchCouncilStats();
+  // Two venues, one jury. The Mimir contract holds VS challenges; DreamDEX
+  // holds everything the personas have actually traded, and reading only the
+  // former is why this page reported zero stakes while positions were open.
+  const [chainStats, positions] = await Promise.all([
+    fetchCouncilStats(),
+    listVenuePositions({ limit: 400 }).catch(() => [] as VenuePositionRow[]),
+  ]);
+
+  const byAgent = new Map<string, VenuePositionRow[]>();
+  for (const position of positions) {
+    const list = byAgent.get(position.agentId) ?? [];
+    list.push(position);
+    byAgent.set(position.agentId, list);
+  }
+
+  const stats = chainStats.map((entry) => {
+    const venue = byAgent.get(entry.persona.slug) ?? [];
+    return {
+      ...entry,
+      venuePositions: venue,
+      stakesPlaced: entry.stakesPlaced + venue.length,
+      totalStakedUsdc:
+        entry.totalStakedUsdc + venue.reduce((sum, position) => sum + position.stakeUsdc, 0),
+    };
+  });
 
   const totalStakes       = stats.reduce((acc, s) => acc + s.stakesPlaced, 0);
   const totalStakedUsdc   = stats.reduce((acc, s) => acc + s.totalStakedUsdc, 0);
@@ -241,8 +306,9 @@ export default async function CouncilPage() {
         <p className="mx-auto max-w-2xl text-center text-sm text-pv-muted">
           Each persona reads the same claims and the same evidence but reaches different
           verdicts based on character — optimists tilt up, doomers tilt down, contrarians
-          chase imbalance, specialists only touch their domain. Every stake below is a real
-          on-chain USDC stake signed by that persona&apos;s local worker key.
+          chase imbalance, specialists only touch their domain. Every position below is real
+          collateral committed on chain by that persona&apos;s own worker key, on the DreamDEX
+          binaries and on VS challenges alike.
         </p>
         {stats.length > 0 && (
           <div className="flex flex-wrap items-center justify-center gap-2 pt-2 font-mono text-[11px] uppercase tracking-[0.16em]">

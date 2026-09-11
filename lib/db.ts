@@ -239,6 +239,34 @@ const SCHEMA_STATEMENTS: SqlStatement[] = [
   { sql: "CREATE INDEX IF NOT EXISTS idx_reasoning_agent ON agent_reasoning_events(agent_id)" },
   { sql: "CREATE INDEX IF NOT EXISTS idx_reasoning_track ON agent_reasoning_events(track)" },
   { sql: "CREATE INDEX IF NOT EXISTS idx_reasoning_visibility ON agent_reasoning_events(visibility)" },
+  /**
+   * What an agent bought on the DreamDEX venue, and why.
+   *
+   * The council's stakes used to be readable only from the Mimir contract's
+   * ClaimChallenged logs, so every page that showed persona activity reported
+   * zero while the personas were trading binaries all day. The worker is the
+   * only place that knows both halves — the fill and the reasoning behind it —
+   * so it writes them here as it acts.
+   *
+   * Keyed by transaction hash: a retried write after a timeout must not create
+   * a second position.
+   */
+  { sql: `CREATE TABLE IF NOT EXISTS venue_positions (
+    tx_hash TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    track TEXT NOT NULL,
+    market_ref TEXT NOT NULL,
+    question TEXT NOT NULL DEFAULT '',
+    outcome TEXT NOT NULL,
+    stake_usdc DOUBLE PRECISION NOT NULL DEFAULT 0,
+    quantity DOUBLE PRECISION NOT NULL DEFAULT 0,
+    price DOUBLE PRECISION NOT NULL DEFAULT 0,
+    confidence INTEGER NOT NULL DEFAULT 0,
+    rationale TEXT NOT NULL DEFAULT '',
+    created_at BIGINT NOT NULL DEFAULT 0
+  )` },
+  { sql: "CREATE INDEX IF NOT EXISTS idx_venue_positions_agent ON venue_positions(agent_id, created_at)" },
+  { sql: "CREATE INDEX IF NOT EXISTS idx_venue_positions_market ON venue_positions(market_ref)" },
   { sql: `CREATE TABLE IF NOT EXISTS agent_registry (
     agent_id TEXT PRIMARY KEY,
     schema_version SMALLINT NOT NULL,
@@ -2271,6 +2299,74 @@ export async function getAgentTradeRowsBatch(
     });
   }
   return grouped;
+}
+
+export interface VenuePositionRow {
+  txHash: string;
+  agentId: string;
+  track: string;
+  marketRef: string;
+  question: string;
+  outcome: "YES" | "NO";
+  stakeUsdc: number;
+  quantity: number;
+  price: number;
+  confidence: number;
+  rationale: string;
+  createdAt: number;
+}
+
+/** Append one filled order. Idempotent on the transaction hash. */
+export async function recordVenuePosition(row: VenuePositionRow): Promise<void> {
+  const pool = await getDb();
+  await execute(pool, {
+    sql: `INSERT INTO venue_positions (
+      tx_hash, agent_id, track, market_ref, question, outcome,
+      stake_usdc, quantity, price, confidence, rationale, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(tx_hash) DO NOTHING`,
+    args: [
+      row.txHash.toLowerCase(), row.agentId, row.track, row.marketRef,
+      row.question.slice(0, 400), row.outcome, row.stakeUsdc, row.quantity,
+      row.price, row.confidence, row.rationale.slice(0, 600), row.createdAt,
+    ],
+  });
+}
+
+/** Newest first. `agentIds` narrows to one roster; omit it for everything. */
+export async function listVenuePositions(
+  options: { agentIds?: string[]; limit?: number } = {},
+): Promise<VenuePositionRow[]> {
+  const pool = await getDb();
+  const limit = options.limit ?? 200;
+  const ids = options.agentIds?.filter(Boolean) ?? null;
+  if (ids && ids.length === 0) return [];
+
+  const where = ids ? `WHERE agent_id IN (${ids.map((_, i) => `$${i + 1}`).join(", ")})` : "";
+  const { rows } = await execute(pool, {
+    sql: `SELECT tx_hash, agent_id, track, market_ref, question, outcome,
+      stake_usdc, quantity, price, confidence, rationale, created_at
+      FROM venue_positions ${where} ORDER BY created_at DESC LIMIT ${Number(limit)}`,
+    args: ids ?? [],
+  });
+
+  return rows.map((raw) => {
+    const row = raw as Record<string, unknown>;
+    return {
+      txHash: getString(row.tx_hash),
+      agentId: getString(row.agent_id),
+      track: getString(row.track),
+      marketRef: getString(row.market_ref),
+      question: getString(row.question),
+      outcome: getString(row.outcome) === "NO" ? "NO" : "YES",
+      stakeUsdc: getNumber(row.stake_usdc),
+      quantity: getNumber(row.quantity),
+      price: getNumber(row.price),
+      confidence: getNumber(row.confidence),
+      rationale: getString(row.rationale),
+      createdAt: getNumber(row.created_at),
+    };
+  });
 }
 
 /** Registry listing for the agents page. Revoked agents are shown, not hidden. */

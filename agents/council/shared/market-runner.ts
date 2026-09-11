@@ -9,6 +9,8 @@
  */
 
 import { createThrottle } from "../../../lib/agent-bootstrap";
+import { recordVenuePosition } from "../../../lib/db";
+import { isPhilosopher } from "../philosophers";
 import { kellyFraction } from "../../../lib/kelly";
 import type { DreamDexMarket } from "../../../lib/dreamdex-market";
 import type { PersonaSpec } from "../personas";
@@ -326,6 +328,32 @@ export async function runPersonaForMarket(args: {
     `[council:${persona.slug}] ✓ bought ${outcome} on ${market.ref} for ${stakeUsdc} collateral ` +
     `(${quantity.toFixed(4)} @ ${price.toFixed(4)}) — ${txHash}`,
   );
+
+  // The worker is the only place that holds both the fill and the reasoning
+  // behind it. Without this the site can only read the Mimir contract, where a
+  // DreamDEX position leaves no trace, and every persona reads as idle.
+  // A failed write must not unwind a position that is already on chain.
+  if (txHash) {
+    await recordVenuePosition({
+      txHash,
+      agentId: persona.slug,
+      track: isPhilosopher(persona) ? "philosopher" : "council",
+      marketRef: market.ref,
+      question: market.question,
+      outcome,
+      stakeUsdc,
+      quantity,
+      price,
+      confidence: decision.confidence ?? 0,
+      rationale: decision.rationale,
+      createdAt: Date.now(),
+    }).catch((err) => {
+      console.warn(
+        `[council:${persona.slug}] position recorded on chain but not in the database:`,
+        err instanceof Error ? err.message.slice(0, 100) : err,
+      );
+    });
+  }
 
   return { persona, ref: market.ref, outcome, stakeUsdc, txHash, rationale: decision.rationale };
 }
