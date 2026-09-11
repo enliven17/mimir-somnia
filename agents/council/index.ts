@@ -284,12 +284,40 @@ async function pollMarkets(): Promise<number> {
           // book that cannot be read must cost this one decision, not the rest
           // of this persona's cycle.
           try {
+            // Buy a few peers' takes before forming one. This is the council's
+            // own x402 traffic: each read pays the selling persona's wallet
+            // directly, so reasoning is a product one agent sells another.
+            let peerReasoning: string[] = [];
+            if (PEER_READS_ENABLED && PEER_READS_PER_PERSONA > 0) {
+              const reads = await buyPeerReasoning({
+                buyer: persona,
+                activePersonas: ALL_ACTIVE,
+                market: market.ref,
+                baseUrl: PEER_READS_APP_URL,
+                readsPerPersona: PEER_READS_PER_PERSONA,
+                capUsdc: PEER_READ_CAP_USDC,
+                delayMs: PEER_READ_DELAY_MS,
+              }).catch(() => []);
+              if (reads.length > 0) {
+                peerReasoning = reads.map((read) => `${read.sellerName}: ${read.reasoning}`);
+                const paidUsdc = reads.reduce(
+                  (sum, read) => sum + unitsToUsdc(BigInt(read.pricePaidUnits ?? "0")),
+                  0,
+                );
+                console.log(
+                  `[council:${persona.slug}] bought ${reads.length} peer read(s) on ${market.ref} ` +
+                  `(${paidUsdc.toFixed(6)} USDC)`,
+                );
+              }
+            }
+
             const receipt = await runPersonaForMarket({
               persona,
               market,
               exchange: exchange as never,
               bankrollUsdc: bankroll,
               engagedRefs,
+              peerReasoning,
               dryRun: DRY_RUN,
             });
             if (receipt) {

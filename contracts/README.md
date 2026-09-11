@@ -7,10 +7,18 @@ settled by the oracle worker. Stakes are held in the collateral token (6
 decimals); gas is native STT.
 
 Deployed on **Somnia Shannon (50312)** at
-[`0x6ac8622338a249a0870391678f4947d2bdf2d9bd`](https://shannon-explorer.somnia.network/address/0x6ac8622338a249a0870391678f4947d2bdf2d9bd)
-(block 485413812). The previous deployment,
-`0xe4669525f67472173e3b9d1a4d349559b87dcde6`, lacked `createRematch`; it held no
-claims, so nothing was migrated.
+[`0x3d81d6f651f93bc10a94bbe0e5dc1f7cd74fd84f`](https://shannon-explorer.somnia.network/address/0x3d81d6f651f93bc10a94bbe0e5dc1f7cd74fd84f)
+(block 485423958), with a fee policy of 200 bps platform + 100 bps agent-owner.
+
+Fees are charged on **profit**, never on the gross payout, so a winner can never
+receive less than their principal. Changing the policy on a live contract goes
+through `queueFeePolicy` and a two-day timelock; these were set in the
+constructor instead, which is only defensible because the venue was empty —
+`claimCount` was 0 and no participant could be surprised by the change.
+
+Earlier deployments: `0x6ac8…d9bd` (added `createRematch`, fees 0) and
+`0xe466…cde6` (no `createRematch`). Neither held claims, so nothing was
+migrated.
 
 ### Verifying this source against the chain
 

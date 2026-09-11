@@ -46,6 +46,24 @@ interface RevenueSummary {
     dustUsdc: number;
     unclaimedUsdc: number;
   };
+  /** The DreamDEX venue, where the agents actually trade. */
+  venue: {
+    settledMarkets: number;
+    voidedMarkets: number;
+    liveMarkets: number;
+    totalMarkets: number;
+    volumeCollateral: number;
+    tradeCount: number;
+    recentSettlements: Array<{
+      symbol: string;
+      asset: string;
+      question: string;
+      outcome: "YES" | "NO" | "VOID";
+      resolvedAt: number | null;
+      volumeCollateral: number;
+      tradeCount: number;
+    }>;
+  };
 }
 
 function short(addr: string | null): string {
@@ -117,15 +135,32 @@ export default function RevenuePage() {
       {data && (
         <>
           <section className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <Stat label="Venue volume" value={`${data.venue.volumeCollateral.toFixed(4)} collateral`} accent />
+            <Stat label="Venue trades" value={data.venue.tradeCount.toLocaleString()} accent />
+            <Stat label="Live markets" value={String(data.venue.liveMarkets)} />
+            <Stat label="Settled markets" value={String(data.venue.settledMarkets)} />
+            <Stat label="Voided markets" value={String(data.venue.voidedMarkets)} />
+            <Stat label="x402 service revenue" value={`${data.totalUsdc.toFixed(6)} USDC`} accent />
+          </section>
+          <p className="mt-3 font-mono text-[11px] uppercase tracking-[0.12em] text-pv-muted">
+            DreamDEX · {data.venue.totalMarkets} markets indexed · {data.totalCalls} paid calls · {data.uniquePayers} payers / {data.uniqueSellers} sellers
+          </p>
+          <p className="mt-2 text-[12px] text-pv-muted">
+            Mimir charges no fee on DreamDEX — it is the protocol&apos;s venue, not ours — so
+            these are volume and settlement counts, not income. The VS contract below is where
+            Mimir&apos;s own fees accrue.
+          </p>
+
+          <h2 className="mt-10 font-display text-lg font-semibold text-pv-text">VS contract</h2>
+          <section className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Stat label="Gross market volume" value={`${data.market.grossVolumeUsdc.toFixed(6)} USDC`} />
             <Stat label="Market payouts" value={`${data.market.payoutUsdc.toFixed(6)} USDC`} />
             <Stat label="Platform fees" value={`${data.market.platformFeeUsdc.toFixed(6)} USDC`} accent />
             <Stat label="Agent-owner fees" value={`${data.market.agentOwnerFeeUsdc.toFixed(6)} USDC`} accent />
-            <Stat label="x402 service revenue" value={`${data.totalUsdc.toFixed(6)} USDC`} accent />
             <Stat label="Unclaimed fees" value={`${data.market.unclaimedUsdc.toFixed(6)} USDC`} />
           </section>
           <p className="mt-3 font-mono text-[11px] uppercase tracking-[0.12em] text-pv-muted">
-            {data.market.settledMarkets} settled markets · {data.market.dustUsdc.toFixed(6)} USDC recorded dust · {data.totalCalls} paid calls · {data.uniquePayers} payers / {data.uniqueSellers} sellers
+            {data.market.settledMarkets} settled claims · {data.market.dustUsdc.toFixed(6)} USDC recorded dust
           </p>
 
           {/* A bare row of zeros reads as "broken", when in fact these are two

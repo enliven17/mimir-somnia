@@ -38,17 +38,25 @@ function payingWalletForPersona(persona: PersonaSpec): PayingWallet | null {
   }
 }
 
+/** Stable rotation seed for a subject that may be an id or a market ref. */
+function subjectSeed(subject: number | string): number {
+  if (typeof subject === "number") return subject;
+  let hash = 0;
+  for (let i = 0; i < subject.length; i++) hash = (hash * 31 + subject.charCodeAt(i)) >>> 0;
+  return hash;
+}
+
 function selectPeerSellers(
   buyer: PersonaSpec,
   activePersonas: PersonaSpec[],
-  claimId: number,
+  subject: number | string,
   count: number,
 ): PersonaSpec[] {
   const peers = activePersonas.filter((persona) => persona.slug !== buyer.slug);
   if (peers.length <= count) return peers;
 
   const buyerIndex = activePersonas.findIndex((persona) => persona.slug === buyer.slug);
-  const offset = Math.max(0, buyerIndex) + claimId;
+  const offset = Math.max(0, buyerIndex) + subjectSeed(subject);
   const rotated = [...peers.slice(offset % peers.length), ...peers.slice(0, offset % peers.length)];
   return rotated.slice(0, count);
 }
@@ -56,7 +64,14 @@ function selectPeerSellers(
 export async function buyPeerReasoning(args: {
   buyer: PersonaSpec;
   activePersonas: PersonaSpec[];
-  claimId: number;
+  /**
+   * What the reads are about. A claim lives on the Mimir contract; a market is
+   * a DreamDEX binary. Only claims used to be buyable, and with the VS venue
+   * empty that meant no persona ever paid another — x402 revenue stayed at zero
+   * while the council traded all day.
+   */
+  claimId?: number;
+  market?: string;
   baseUrl: string;
   readsPerPersona: number;
   capUsdc: number;
@@ -67,20 +82,25 @@ export async function buyPeerReasoning(args: {
   const payer = payingWalletForPersona(args.buyer);
   if (!payer) return [];
 
+  const subject = args.market ? `market:${args.market}` : args.claimId;
+  if (subject === undefined) return [];
+
   const capUnits = usdcToUnits(args.capUsdc);
   const sellers = selectPeerSellers(
     args.buyer,
     args.activePersonas,
-    args.claimId,
+    subject,
     args.readsPerPersona,
   );
   const reads: PeerReasoningRead[] = [];
 
   for (const seller of sellers) {
+    const subjectParam = args.market
+      ? `market=${encodeURIComponent(args.market)}`
+      : `claimId=${encodeURIComponent(String(args.claimId))}`;
     const url =
       `${args.baseUrl.replace(/\/$/, "")}/api/council/reasoning` +
-      `?claimId=${encodeURIComponent(String(args.claimId))}` +
-      `&persona=${encodeURIComponent(seller.slug)}`;
+      `?${subjectParam}&persona=${encodeURIComponent(seller.slug)}`;
 
     try {
       const result = await fetchWithBudget(url, payer, capUnits, {

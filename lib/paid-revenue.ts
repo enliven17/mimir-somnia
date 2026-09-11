@@ -8,6 +8,7 @@
  * buffer (last 1000 events) when DATABASE_URL is unset, so serving never breaks.
  */
 
+import { getVenueRevenueSummary, EMPTY_VENUE, type VenueRevenueSummary } from "@/lib/server/venue-revenue";
 import {
   getMarketRevenueSummary,
   insertPayment,
@@ -108,6 +109,13 @@ export interface RevenueSummary {
     dustUsdc: number;
     unclaimedUsdc: number;
   };
+  /**
+   * The DreamDEX venue. `market` above is the Mimir contract's own fee ledger
+   * and only moves when a VS claim settles; every market the agents trade is on
+   * DreamDEX, so without this the page reported nothing however busy the venue
+   * was.
+   */
+  venue: VenueRevenueSummary;
 }
 
 const EMPTY_MARKET: RevenueSummary["market"] = {
@@ -167,6 +175,7 @@ function fromDbSummary(s: PaymentsRevenueSummary): RevenueSummary {
       at: r.settled_at,
     })),
     market: EMPTY_MARKET,
+    venue: EMPTY_VENUE,
   };
 }
 
@@ -219,6 +228,7 @@ function inMemorySummary(limit: number): RevenueSummary {
         at: e.settledAt,
       })),
     market: EMPTY_MARKET,
+    venue: EMPTY_VENUE,
   };
 }
 
@@ -237,9 +247,10 @@ export async function getRevenueSummary(limit = 25): Promise<RevenueSummary> {
     };
   };
   try {
-    const [payments, market] = await Promise.all([
+    const [payments, market, venue] = await Promise.all([
       getPaymentsRevenueSummary(limit),
       getMarketRevenueSummary(),
+      getVenueRevenueSummary(),
     ]);
     return {
       ...withBaseline(fromDbSummary(payments)),
@@ -252,8 +263,11 @@ export async function getRevenueSummary(limit = 25): Promise<RevenueSummary> {
         dustUsdc: unitsToUsdc(market.dustAtomic),
         unclaimedUsdc: unitsToUsdc(market.unclaimedAtomic),
       },
+      venue,
     };
   } catch {
-    return withBaseline(inMemorySummary(limit));
+    // The venue half does not need the database, so it still answers when the
+    // payment ledger cannot.
+    return { ...withBaseline(inMemorySummary(limit)), venue: await getVenueRevenueSummary() };
   }
 }

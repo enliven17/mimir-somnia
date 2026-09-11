@@ -29,14 +29,17 @@ type Entry = CachedReasoning & { at: number };
 
 const entries = new Map<string, Entry>();
 
-const cacheKey = (claimId: number, slug: string) => `${claimId}:${slug}`;
+/** A claim id or a market ref — both identify one subject to reason about. */
+export type ReasoningSubject = number | string;
+
+const cacheKey = (subject: ReasoningSubject, slug: string) => `${subject}:${slug}`;
 
 export function getCachedReasoning(
-  claimId: number,
+  subject: ReasoningSubject,
   slug: string,
   nowMs = Date.now()
 ): CachedReasoning | null {
-  const key = cacheKey(claimId, slug);
+  const key = cacheKey(subject, slug);
   const hit = entries.get(key);
   if (!hit) {
     return null;
@@ -55,12 +58,12 @@ export function getCachedReasoning(
 }
 
 export function setCachedReasoning(
-  claimId: number,
+  subject: ReasoningSubject,
   slug: string,
   value: CachedReasoning,
   nowMs = Date.now()
 ): void {
-  const key = cacheKey(claimId, slug);
+  const key = cacheKey(subject, slug);
   // Re-insert so the key moves to the back of the eviction order.
   entries.delete(key);
   if (entries.size >= MAX_ENTRIES) {
