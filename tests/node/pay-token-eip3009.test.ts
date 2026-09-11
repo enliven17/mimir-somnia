@@ -91,3 +91,22 @@ test("minting is restricted, and six decimals match the venue's collateral", () 
   const setMinter = body("function setMinter(address next)", "// ── EIP-3009");
   assert.match(setMinter, /msg\.sender == minter/);
 });
+
+test("the advertised EIP-712 domain matches the token's own", async () => {
+  // The buyer signs over whatever the seller advertises, and the token rebuilds
+  // the same domain to check it. If the two drift, every signature recovers to
+  // the wrong address and every settlement reverts — with nothing in the error
+  // pointing at the domain as the cause.
+  const { PAY_TOKEN_NAME, PAY_TOKEN_VERSION } = await import("../../lib/x402/config");
+
+  assert.match(
+    SOURCE,
+    new RegExp(String.raw`string public constant name\s+= "${PAY_TOKEN_NAME}";`),
+    `the token's name must equal the advertised "${PAY_TOKEN_NAME}"`,
+  );
+  assert.match(
+    SOURCE,
+    new RegExp(String.raw`keccak256\(bytes\("${PAY_TOKEN_VERSION}"\)\)`),
+    `the token's domain version must equal the advertised "${PAY_TOKEN_VERSION}"`,
+  );
+});

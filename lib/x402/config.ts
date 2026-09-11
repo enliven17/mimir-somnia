@@ -11,6 +11,16 @@ import { parseUsdcAtomic, USDC_ADDRESS } from "../usdc";
 export const X402_NETWORK = (process.env.X402_NETWORK?.trim() || SOMNIA_CAIP2) as `${string}:${string}`;
 export const X402_SCHEME = "exact";
 /**
+ * MimirPayUSD's EIP-712 domain, which a buyer signs over.
+ *
+ * Must match contracts/MimirPayUSD.sol exactly — the token builds its separator
+ * from these two strings, so a mismatch makes every signature recover to the
+ * wrong address and every settlement revert.
+ */
+export const PAY_TOKEN_NAME = process.env.PAY_TOKEN_NAME?.trim() || "Mimir Pay USD";
+export const PAY_TOKEN_VERSION = process.env.PAY_TOKEN_VERSION?.trim() || "1";
+
+/**
  * What payments settle in.
  *
  * Not the venue's collateral: that is a plain ERC-20 with no EIP-3009, no
@@ -72,8 +82,22 @@ export function priceToUsdcUnits(price: string): bigint {
  * is also the more honest declaration: the price is in this token, not in
  * dollars that happen to be worth a token.
  */
-export function priceFor(key: PriceKey): { asset: `0x${string}`; amount: string } {
-  return { asset: X402_ASSET, amount: priceToUsdcUnits(PRICES[key]).toString() };
+export function priceFor(key: PriceKey): {
+  asset: `0x${string}`;
+  amount: string;
+  extra: Record<string, unknown>;
+} {
+  return {
+    asset: X402_ASSET,
+    amount: priceToUsdcUnits(PRICES[key]).toString(),
+    // The buyer signs an EIP-712 authorization, and the domain it signs over
+    // has to match the token's exactly or the signature recovers to a different
+    // address and settlement reverts. The buyer cannot read that domain from a
+    // price, so the seller states it: "EIP-712 domain parameters (name,
+    // version) are required in payment requirements" is what a buyer says
+    // otherwise.
+    extra: { name: PAY_TOKEN_NAME, version: PAY_TOKEN_VERSION },
+  };
 }
 
 /**
