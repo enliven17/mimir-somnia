@@ -41,6 +41,7 @@ import ExploreArenaEmptyState from "@/components/explorer/ExploreArenaEmptyState
 import ExploreFilteredEmptyState from "@/components/explorer/ExploreFilteredEmptyState";
 import { ChevronDown, ListFilter, RefreshCw, Search, X } from "lucide-react";
 import ChallengeOpportunityCard from "@/components/explorer/ChallengeOpportunityCard";
+import MarketCard, { type MarketCardData } from "@/components/explorer/MarketCard";
 import { BlueprintHeading } from "@/components/BlueprintGrid";
 import type { VSCacheFreshness } from "@/lib/vs-freshness";
 
@@ -52,7 +53,7 @@ const filterPillActive = "border-pv-emerald/50 bg-pv-emerald text-pv-bg";
 const filterPillInactive =
   "border-pv-ink/[0.15] bg-transparent text-pv-muted hover:border-pv-ink/[0.28] hover:text-pv-text";
 
-type ArenaViewMode = "open" | "ai" | "closed";
+type ArenaViewMode = "markets" | "open" | "ai" | "closed";
 
 function getOpportunitySearchBlob(opportunity: ChallengeOpportunity) {
   return [
@@ -147,7 +148,14 @@ export default function ExploreClient() {
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [quickFilterMenuOpen, setQuickFilterMenuOpen] = useState(false);
   const [minDraft, setMinDraft] = useState("");
-  const [activeView, setActiveView] = useState<ArenaViewMode>("open");
+  const [activeView, setActiveView] = useState<ArenaViewMode>("markets");
+
+  // DreamDEX binaries. The VS lists below come from the Mimir contract, which is
+  // empty until a user opens a claim — leading with it made a busy venue look
+  // like a dead app.
+  const [markets, setMarkets] = useState<MarketCardData[]>([]);
+  const [marketsLoading, setMarketsLoading] = useState(true);
+  const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
   const [, startViewTransition] = useTransition();
   const sortMenuRef = useRef<HTMLDivElement>(null);
   const quickFilterMenuRef = useRef<HTMLDivElement>(null);
@@ -563,6 +571,76 @@ export default function ExploreClient() {
     );
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const response = await fetch("/api/markets?limit=100", { cache: "no-store" });
+        if (!response.ok) throw new Error(String(response.status));
+        const payload = (await response.json()) as { items?: MarketCardData[] };
+        if (!cancelled) setMarkets(payload.items ?? []);
+      } catch {
+        // The VS lists are independent; a venue outage must not blank the page.
+        if (!cancelled) setMarkets([]);
+      } finally {
+        if (!cancelled) setMarketsLoading(false);
+      }
+    };
+    void load();
+    const refresh = setInterval(load, 60_000);
+    // The venue keeps calling an expired market "Trading", so the cards count
+    // down against a clock of their own rather than trusting that field.
+    const tick = setInterval(() => setNowSeconds(Math.floor(Date.now() / 1000)), 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(refresh);
+      clearInterval(tick);
+    };
+  }, []);
+
+  /** Tradable first, then closest to settling — the ones a reader can act on. */
+  const sortedMarkets = useMemo(() => {
+    const live = (m: MarketCardData) => m.status === "Trading" && m.expiry > nowSeconds;
+    return [...markets].sort((a, b) => {
+      if (live(a) !== live(b)) return live(a) ? -1 : 1;
+      return a.expiry - b.expiry;
+    });
+  }, [markets, nowSeconds]);
+
+  const renderMarkets = () => {
+    if (marketsLoading) {
+      return (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {[0, 1, 2].map((i) => <ArenaCardSkeleton key={i} />)}
+        </div>
+      );
+    }
+    if (sortedMarkets.length === 0) {
+      return (
+        <EmptyState
+          title="No markets indexed yet"
+          description="The venue has not opened a binary market that this app can see. Agents trade as soon as one appears."
+        />
+      );
+    }
+    return (
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {sortedMarkets.map((market) => (
+          <motion.div
+            key={market.id}
+            layout
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.22 }}
+          >
+            <MarketCard market={market} now={nowSeconds} />
+          </motion.div>
+        ))}
+      </div>
+    );
+  };
+
   const renderOpenChallenges = () => {
     if (loading) {
       return (
@@ -709,6 +787,30 @@ export default function ExploreClient() {
               </div>
 
               <div className="inline-flex w-full flex-col gap-2 border border-pv-border/15 bg-pv-bg p-2 sm:w-auto sm:flex-row sm:items-center">
+                <button
+                  type="button"
+                  onClick={() => switchView("markets")}
+                  aria-pressed={activeView === "markets"}
+                  className={`flex min-h-[52px] flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-all duration-200 sm:min-w-[240px] ${
+                    activeView === "markets"
+                      ? "border border-pv-emerald/40 bg-pv-emerald/[0.18]"
+                      : "border border-transparent bg-transparent hover:border-pv-ink/[0.08] hover:bg-pv-ink/[0.03]"
+                  }`}
+                >
+                  <span className="font-mono text-[11px] font-bold uppercase tracking-[0.2em] text-pv-text">
+                    Markets
+                  </span>
+                  <span
+                    className={`rounded-full px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.14em] ${
+                      activeView === "markets"
+                        ? "bg-pv-emerald text-pv-bg"
+                        : "border border-pv-ink/[0.12] bg-black/20 text-pv-muted"
+                    }`}
+                  >
+                    {sortedMarkets.length}
+                  </span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => switchView("open")}
@@ -1258,6 +1360,17 @@ export default function ExploreClient() {
       <AnimatedItem className="relative z-0">
         <section id="arena-content" className="pb-4">
           <AnimatePresence mode="wait" initial={false}>
+            {activeView === "markets" && (
+              <motion.div
+                key="arena-markets-view"
+                initial={{ opacity: 0, y: 14 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.22 }}
+              >
+                {renderMarkets()}
+              </motion.div>
+            )}
             {activeView === "open" && (
               <motion.div
                 key="arena-open-view"

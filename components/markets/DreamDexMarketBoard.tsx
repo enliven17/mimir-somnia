@@ -3,6 +3,7 @@
 /** How far past the best quote a "market" order may fill. */
 const MARKET_SLIPPAGE = 0.03;
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWalletClient } from "wagmi";
 import { createExchange } from "@/lib/dreamdex";
@@ -31,12 +32,26 @@ function actionHash(value: unknown) {
   return typeof hash === "string" ? hash : null;
 }
 
-export default function DreamDexMarketBoard() {
+/**
+ * The trading surface for DreamDEX binaries.
+ *
+ * Two shapes from one component. The explorer is the listing now, so a detail
+ * page passes `focusOne` and the market it was opened for: the picker column
+ * disappears and the page is about that one question. Without a market it still
+ * behaves as the browsable board it started as.
+ */
+export default function DreamDexMarketBoard({
+  initialMarketId,
+  focusOne = false,
+}: {
+  initialMarketId?: string;
+  focusOne?: boolean;
+} = {}) {
   const { address, isConnected, connect } = useWallet();
   const { data: walletClient } = useWalletClient();
   const exchangeRef = useRef<SomniaMarkets | null>(null);
   const [markets, setMarkets] = useState<DreamDexMarket[]>([]);
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedId, setSelectedId] = useState(initialMarketId ?? "");
   const [outcome, setOutcome] = useState<"YES" | "NO">("YES");
   const [book, setBook] = useState<DreamDexOrderBook | null>(null);
   const [portfolio, setPortfolio] = useState<DreamDexPortfolio | null>(null);
@@ -58,8 +73,10 @@ export default function DreamDexMarketBoard() {
     const payload = await response.json() as { items?: DreamDexMarket[] };
     const items = payload.items ?? [];
     setMarkets(items);
-    setSelectedId((current) => current || items[0]?.id || "");
-  }, []);
+    // A detail page's market wins over "whatever came back first", and the
+    // requested id may not be the first item — or present at all.
+    setSelectedId((current) => current || initialMarketId || items[0]?.id || "");
+  }, [initialMarketId]);
 
   const loadBook = useCallback(async (marketId: string, selectedOutcome: "YES" | "NO") => {
     if (!marketId) return;
@@ -203,16 +220,27 @@ export default function DreamDexMarketBoard() {
     <div className="mx-auto max-w-[1240px] space-y-5 px-4 py-8 sm:px-6 lg:px-8">
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
         <div>
-          <p className="font-mono text-[11px] font-bold uppercase tracking-[0.2em] text-pv-emerald">DreamDEX markets</p>
-          <h1 className="mt-2 font-display text-3xl font-bold tracking-tight text-pv-text">Trade live event contracts</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-pv-muted">Discover indexed binary markets, inspect the YES/NO book, and execute with your connected wallet.</p>
+          <p className="font-mono text-[11px] font-bold uppercase tracking-[0.2em] text-pv-emerald">DreamDEX market</p>
+          <h1 className="mt-2 font-display text-3xl font-bold tracking-tight text-pv-text">
+            {focusOne ? (selected?.question || selected?.symbol || "Loading market…") : "Trade live event contracts"}
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-pv-muted">
+            {focusOne
+              ? "Inspect the YES/NO book and execute with your connected wallet."
+              : "Discover indexed binary markets, inspect the YES/NO book, and execute with your connected wallet."}
+          </p>
         </div>
-        <button type="button" onClick={() => void loadMarkets()} className="btn-compact-secondary self-start sm:self-auto">Refresh markets</button>
+        {focusOne ? (
+          <Link href="/explorer" className="btn-compact-secondary self-start sm:self-auto">Back to explorer</Link>
+        ) : (
+          <button type="button" onClick={() => void loadMarkets()} className="btn-compact-secondary self-start sm:self-auto">Refresh markets</button>
+        )}
       </div>
 
       {notice ? <div className="rounded-xl border border-pv-emerald/30 bg-pv-emerald/[0.08] px-4 py-3 text-xs text-pv-text break-all">{notice}</div> : null}
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(260px,0.8fr)_minmax(0,1.4fr)]">
+      <div className={focusOne ? "grid gap-5" : "grid gap-5 lg:grid-cols-[minmax(260px,0.8fr)_minmax(0,1.4fr)]"}>
+        {!focusOne && (
         <section className="space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="font-display text-lg font-bold text-pv-text">Available markets</h2>
@@ -239,6 +267,7 @@ export default function DreamDexMarketBoard() {
             {!markets.length ? <div className="rounded-2xl border border-dashed border-pv-border/50 p-6 text-sm text-pv-muted">No active markets returned by the indexer.</div> : null}
           </div>
         </section>
+        )}
 
         <section className="space-y-5">
           {selected ? (
