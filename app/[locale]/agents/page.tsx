@@ -20,6 +20,7 @@ import { BlueprintHeading } from "@/components/BlueprintGrid";
 import { AgentRoster } from "@/components/agents/AgentRoster";
 import { TimeWindowTabs } from "@/components/agents/AgentStats";
 import { isTimeWindow, type TimeWindow } from "@/lib/agents/performance";
+import { listVenuePositions, type VenuePositionRow } from "@/lib/db";
 import { listAgentsWithPerformance } from "@/lib/server/agent-directory";
 import { openPeepsAvatar } from "@/lib/avatars";
 import { shortenAddress } from "@/lib/constants";
@@ -323,10 +324,14 @@ export default async function AgentsPage({
   //
   // The roster catches its own failure: the event feed below is the page's
   // older, independent half and still renders without a database.
-  const [events, agentInfo, roster] = await Promise.all([
+  const [events, agentInfo, roster, venuePositions] = await Promise.all([
     fetchEvents(),
     fetchAgentAddresses(),
     listAgentsWithPerformance(window).catch(() => []),
+    // The feed below is claim-shaped and the venue leaves no claim behind, so
+    // the positions the agents actually opened get their own section rather
+    // than being forced into a shape that does not fit them.
+    listVenuePositions({ limit: 40 }).catch(() => [] as VenuePositionRow[]),
   ]);
   const councilPersonas = getActiveCouncilPersonas();
   const streaks = deriveStreaks(events);
@@ -558,6 +563,61 @@ export default async function AgentsPage({
             )}
           </nav>
         </div>
+
+        {venuePositions.length > 0 && (
+          <section className="mb-8">
+            <h2 className="mb-3 font-display text-base font-bold tracking-tight text-pv-text">
+              Venue positions
+            </h2>
+            <ul className="space-y-2">
+              {venuePositions.slice(0, 12).map((position) => (
+                <li
+                  key={position.txHash}
+                  className="rounded-2xl border border-pv-border/30 bg-pv-surface/70 p-4"
+                >
+                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-pv-muted">
+                      {position.track}
+                    </span>
+                    <span className="text-[13px] font-bold text-pv-text">{position.agentId}</span>
+                    <span
+                      className={
+                        position.outcome === "YES"
+                          ? "font-mono text-[11px] font-bold text-pv-emerald"
+                          : "font-mono text-[11px] font-bold text-pv-gold"
+                      }
+                    >
+                      bought {position.outcome}
+                    </span>
+                    <span className="min-w-0 truncate font-mono text-[11px] text-pv-muted">
+                      {position.marketRef}
+                    </span>
+                    <span className="font-mono text-[11px] text-pv-text/85">
+                      {position.stakeUsdc.toFixed(2)} @ {position.price.toFixed(3)}
+                    </span>
+                    {position.confidence > 0 && (
+                      <span className="font-mono text-[10px] text-pv-muted">
+                        {position.confidence}% confident
+                      </span>
+                    )}
+                    <a
+                      href={getExplorerTxUrl(position.txHash)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="ml-auto font-mono text-[10px] text-pv-muted hover:text-pv-emerald"
+                    >
+                      tx ↗
+                    </a>
+                  </div>
+                  {position.rationale && (
+                    <p className="mt-1.5 text-[12px] leading-5 text-pv-muted">{position.rationale}</p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         {visibleEvents.length === 0 ? (
           <div className="rounded-2xl border border-pv-border/30 bg-pv-surface/70 p-8 text-center text-sm text-pv-muted">
             {filter === "humans"

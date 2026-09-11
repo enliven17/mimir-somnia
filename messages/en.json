@@ -160,7 +160,11 @@
     "manifestPillar2Body": "Outcomes are tied to explicit terms and proof sources, not opinion battles after the fact.",
     "manifestPillar3Title": "No waiting",
     "manifestPillar3Body": "When conditions resolve, settlement executes immediately and payouts are distributed automatically.",
-    "volumeSettled": "USDC Settled"
+    "volumeSettled": "USDC Settled",
+    "liveMarkets": "Live Markets",
+    "venueTrades": "Trades Settled",
+    "venueVolume": "Volume Traded",
+    "vsOpenClaims": "VS Challenges"
   },
   "create": {
     "challengeSectionTitle": "WHAT WILL HAPPEN?",

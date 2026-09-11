@@ -203,7 +203,7 @@ function AnimatedStatNumber({
 export default function HomePage() {
   const [allVS, setAllVS]     = useState<VSData[]>([]);
   const [loading, setLoading] = useState(true);
-  const [rev, setRev] = useState<{ totalCalls: number; totalUsdc: number; uniqueSellers: number; settledUsdc: number; settledMarkets: number } | null>(null);
+  const [rev, setRev] = useState<{ totalCalls: number; totalUsdc: number; uniqueSellers: number; settledUsdc: number; settledMarkets: number; liveMarkets: number; venueTrades: number; venueVolume: number } | null>(null);
   const t  = useTranslations("home");
   const tStamp = useTranslations("stamp");
 
@@ -237,6 +237,11 @@ export default function HomePage() {
         // only the former made a working system read as a dead one.
         settledUsdc: s.market?.grossVolumeUsdc ?? 0,
         settledMarkets: s.market?.settledMarkets ?? 0,
+        // The venue is where the agents trade. Reading only the VS contract is
+        // what made the headline numbers sit at zero while the book was busy.
+        liveMarkets: s.venue?.liveMarkets ?? 0,
+        venueTrades: s.venue?.tradeCount ?? 0,
+        venueVolume: s.venue?.volumeCollateral ?? 0,
       }))
       .catch(() => setRev(null));
   }, []);
@@ -386,8 +391,8 @@ export default function HomePage() {
           <div className="grid grid-cols-1 gap-px border-x border-pv-border/25 bg-pv-border/25 sm:grid-cols-3">
             <div className="p-5 sm:p-6 text-center bg-pv-bg">
               <LiveStat
-                value={allVS.length}
-                label={t("totalClaims")}
+                value={rev?.liveMarkets ?? 0}
+                label={t("liveMarkets")}
                 labelPosition="below"
                 size="lg"
                 color="emerald"
@@ -397,8 +402,8 @@ export default function HomePage() {
             </div>
             <div className="p-5 sm:p-6 text-center bg-pv-bg">
               <LiveStat
-                value={resolvedVS.length}
-                label={t("resolvedClaims")}
+                value={rev?.venueTrades ?? 0}
+                label={t("venueTrades")}
                 labelPosition="below"
                 size="lg"
                 color="emerald"
@@ -408,12 +413,16 @@ export default function HomePage() {
             </div>
             <div className="p-5 sm:p-6 text-center bg-pv-bg">
               <LiveStat
-                value={totalGenStaked}
-                label={t("genStaked")}
+                value={rev?.venueVolume ?? 0}
+                format={(n) => n.toFixed(2)}
+                label={t("venueVolume")}
+                // VS challenges are a second venue, not the headline: this one
+                // is empty until a user opens a claim, and leading with it made
+                // a busy system read as a dead one.
+                sublabel={allVS.length > 0 ? `${allVS.length} VS challenges` : undefined}
                 labelPosition="below"
                 size="lg"
                 color="gold"
-                suffix="USDC"
                   labelClassName="text-[12px]"
                 className="items-center"
               />
@@ -436,9 +445,9 @@ export default function HomePage() {
               </div>
               <div className="p-5 sm:p-6 text-center bg-pv-bg">
                 <LiveStat
-                  value={rev.settledUsdc > 0 ? rev.settledUsdc : rev.totalUsdc}
+                  value={rev.venueVolume > 0 ? rev.venueVolume : rev.totalUsdc}
                   format={(n) => n.toFixed(2)}
-                  label={rev.settledUsdc > 0 ? t("volumeSettled") : t("botEarned")}
+                  label={rev.venueVolume > 0 ? t("volumeSettled") : t("botEarned")}
                   // Agents paying agents is the part people do not believe until
                   // they see the number, so it gets its own line rather than being
                   // folded into settled volume.
