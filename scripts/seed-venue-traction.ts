@@ -22,15 +22,17 @@
  * the minute, and a position opened into one is a coin flip with a fee, not
  * traction.
  *
- * Wallet keys are appended to traction-wallets.env (gitignored) and reused next
- * run. That file IS the money: generating a fresh set each time would strand the
- * float in addresses nothing can sign for.
+ * Wallets are derived from TRACTION_WALLET_SEED rather than generated and
+ * saved. Whatever they hold can only be moved by their keys, and this runs in a
+ * container whose filesystem does not survive a deploy — a saved key file goes
+ * with it and strands the float. Derivation makes every run address the same
+ * wallets, with nothing to persist.
  */
 
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { createHmac } from "node:crypto";
 
 import { formatEther, parseEther } from "viem";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { privateKeyToAccount } from "viem/accounts";
 
 import {
   createSomniaPublicClient,
@@ -43,15 +45,23 @@ import { loadDreamDexMarkets, withDreamDexSigner } from "../lib/dreamdex-market"
 import { ERC20_ABI, unitsToUsdc, usdcToUnits } from "../lib/usdc";
 import { recordVenuePosition } from "../lib/db";
 
-const WALLET_FILE = "traction-wallets.env";
 const COLLATERAL_TOKEN = COLLATERAL as `0x${string}`;
 
 /** Collateral committed per position. */
 const BET_USDC = 1;
 /** Positions each wallet opens per run. */
 const BETS_PER_WALLET = 2;
-/** Hundreds of approve+order pairs at Shannon prices. */
-const GAS_PER_WALLET_STT = 0.02;
+/**
+ * A floor, not a budget.
+ *
+ * The SDK signs every write with a fixed 10M gas ceiling at 60 gwei and takes no
+ * per-call override through the unified exchange. The mempool admits a
+ * transaction only when that whole 0.6 STT envelope is funded, however little
+ * the call actually burns — wallets funded with 0.02 were rejected with
+ * "Missing or invalid parameters", which reads like a malformed request and is
+ * really an unfunded ceiling.
+ */
+const GAS_PER_WALLET_STT = 0.7;
 /** The funder still has to keep working after this. */
 const FUNDER_RESERVE_STT = 0.3;
 /** Refuse markets that settle sooner than this — see the header. */
@@ -78,32 +88,27 @@ interface TractionWallet {
   address: `0x${string}`;
 }
 
-/** Reuse what exists, top up to the requested count, never regenerate. */
-function loadOrCreateWallets(count: number): TractionWallet[] {
-  const existing: TractionWallet[] = [];
-  if (existsSync(WALLET_FILE)) {
-    for (const line of readFileSync(WALLET_FILE, "utf8").split(/\r?\n/)) {
-      const match = line.match(/^TRACTION_WALLET_\d+=(0x[0-9a-fA-F]{64})\s*$/);
-      if (!match) continue;
-      const privateKey = match[1] as `0x${string}`;
-      existing.push({ privateKey, address: privateKeyToAccount(privateKey).address });
-    }
+/**
+ * Wallets derived from a seed, not generated and saved.
+ *
+ * The first version wrote fresh random keys to a file. That file is the money —
+ * whatever these wallets hold can only be moved by their keys — and this runs
+ * inside a container whose filesystem does not survive a deploy, so the keys
+ * went with it and the float they held was stranded. Deriving from
+ * TRACTION_WALLET_SEED makes run N produce exactly the wallets run N-1 funded,
+ * on any machine, with nothing to persist.
+ *
+ * Falls back to the funder's own key as the seed, so a run without the variable
+ * still reproduces itself instead of stranding a fresh set every time.
+ */
+function deriveWallets(count: number, seed: string): TractionWallet[] {
+  const wallets: TractionWallet[] = [];
+  for (let index = 0; index < count; index++) {
+    const privateKey =
+      `0x${createHmac("sha256", seed).update(`traction/${index}`).digest("hex")}` as `0x${string}`;
+    wallets.push({ privateKey, address: privateKeyToAccount(privateKey).address });
   }
-  if (existing.length >= count) return existing.slice(0, count);
-
-  const created: TractionWallet[] = [];
-  for (let i = existing.length; i < count; i++) {
-    const privateKey = generatePrivateKey();
-    created.push({ privateKey, address: privateKeyToAccount(privateKey).address });
-  }
-  if (!DRY && created.length > 0) {
-    const lines = created
-      .map((wallet, index) => `TRACTION_WALLET_${existing.length + index}=${wallet.privateKey}`)
-      .join("\n");
-    appendFileSync(WALLET_FILE, `${lines}\n`, "utf8");
-    console.log(`  wrote ${created.length} new key(s) to ${WALLET_FILE}`);
-  }
-  return [...existing, ...created];
+  return wallets;
 }
 
 function funderKey(): `0x${string}` {
@@ -121,7 +126,8 @@ async function main(): Promise<void> {
   const funder = privateKeyToAccount(key);
   const wallet = createSomniaWalletClientWithKey(key);
 
-  const wallets = loadOrCreateWallets(WALLET_COUNT);
+  const seed = process.env.TRACTION_WALLET_SEED?.trim() || key;
+  const wallets = deriveWallets(WALLET_COUNT, seed);
   const needGas = parseEther(String(GAS_PER_WALLET_STT));
   const needCollateral = usdcToUnits(BET_USDC * BETS);
 
