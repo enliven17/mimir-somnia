@@ -22,10 +22,20 @@ const ONE_SHOT_TASKS = [
 for (const task of ONE_SHOT_TASKS) {
   if (process.env[task.flag] !== "1") continue;
   console.log(`[start] ${task.flag}=1 — running ${task.script} before ${script}`);
-  const result = spawnSync(npm, ["run", task.script], { stdio: "inherit", env: process.env });
-  // A failed task must not keep the service down; the workers are the point.
-  if (result.status !== 0) {
-    console.error(`[start] ${task.script} exited ${result.status ?? "with a signal"} — starting ${script} anyway`);
+  // Bounded, because a task that never exits is indistinguishable from one
+  // still working — and the first version of this hook waited forever on a
+  // script whose database pool held the event loop open, leaving the workers
+  // unstarted. The role matters more than the task.
+  const result = spawnSync(npm, ["run", task.script], {
+    stdio: "inherit",
+    env: process.env,
+    timeout: Number(process.env.ONE_SHOT_TIMEOUT_MS ?? 10 * 60 * 1000),
+    killSignal: "SIGKILL",
+  });
+  if (result.error?.name === "TimeoutError" || result.signal) {
+    console.error(`[start] ${task.script} did not finish in time — killed, starting ${script}`);
+  } else if (result.status !== 0) {
+    console.error(`[start] ${task.script} exited ${result.status} — starting ${script} anyway`);
   }
   console.log(`[start] ${task.script} finished; clear ${task.flag} to stop it running on the next restart`);
 }

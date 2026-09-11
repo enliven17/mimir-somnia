@@ -290,7 +290,15 @@ async function main(): Promise<void> {
   console.log(`\n${DRY ? "Would open" : "Opened"} ${opened} position(s)${failed > 0 ? ` · ${failed} wallet(s) failed` : ""}.`);
 }
 
-main().catch((error) => {
-  console.error("venue traction failed:", error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+main()
+  .then(() => {
+    // Exit rather than fall off the end. The database pool and the venue's
+    // websocket keep the event loop alive, so the process would linger after
+    // its work was done — and when the start wrapper runs this as a one-shot it
+    // waits for the exit, which left the workers unstarted for twenty minutes.
+    process.exit(0);
+  })
+  .catch((error) => {
+    console.error("venue traction failed:", error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
