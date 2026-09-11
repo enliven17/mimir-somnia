@@ -17,7 +17,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { paidRoute, queryParam } from "@/lib/x402/server";
 import type { HTTPRequestContext } from "@x402/core/http";
 import { PRICES } from "@/lib/x402/config";
-import { getPersonaBySlug } from "@/agents/council/personas";
+import { getCouncilPersonaBySlug } from "@/agents/council/roster";
 import { getCouncilAddress } from "@/lib/agent-wallets";
 import { createSomniaPublicClient, getContractAddress } from "@/lib/chain";
 import { fetchDecodedClaim } from "@/lib/claim-codec";
@@ -61,7 +61,7 @@ async function handler(req: NextRequest): Promise<NextResponse> {
   const history = parseHistory(searchParams.get("history"));
 
   // A handler error means no settlement, so an unservable request costs nothing.
-  const persona = getPersonaBySlug(slug);
+  const persona = getCouncilPersonaBySlug(slug);
   if (!persona) return NextResponse.json({ error: `unknown persona '${slug}'` }, { status: 400 });
   if (!persona.promptBias) {
     // Rule-based personas (contrarian, whale-watcher) trade on pool dynamics,

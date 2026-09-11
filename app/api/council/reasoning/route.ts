@@ -21,7 +21,7 @@ import { paidRoute, queryParam } from "@/lib/x402/server";
 import type { HTTPRequestContext } from "@x402/core/http";
 import { PRICES } from "@/lib/x402/config";
 import { verifyPass } from "@/lib/paid-pass";
-import { getPersonaBySlug } from "@/agents/council/personas";
+import { getCouncilPersonaBySlug } from "@/agents/council/roster";
 import { getCouncilAddress } from "@/lib/agent-wallets";
 import { createSomniaPublicClient, getContractAddress } from "@/lib/chain";
 import { MIMIR_ABI } from "@/lib/mimir-abi";
@@ -52,7 +52,7 @@ async function handler(req: NextRequest): Promise<NextResponse> {
   const slug = (searchParams.get("persona") ?? "").toLowerCase().trim();
   const hasPass = hasCouncilPass(req);
 
-  const persona = getPersonaBySlug(slug);
+  const persona = getCouncilPersonaBySlug(slug);
   if (!persona) {
     return NextResponse.json({ error: `unknown persona '${slug}'` }, { status: 400 });
   }

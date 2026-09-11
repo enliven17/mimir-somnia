@@ -12,7 +12,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { paidRoute, queryParam } from "@/lib/x402/server";
 import type { HTTPRequestContext } from "@x402/core/http";
 import { PRICES } from "@/lib/x402/config";
-import { getPersonaBySlug } from "@/agents/council/personas";
+import { getCouncilPersonaBySlug } from "@/agents/council/roster";
 import { isSettlementMode, type SettlementMode } from "@/lib/market-modes";
 import { isPreflightDimension, type PreflightDimension } from "@/lib/market-creator/preflight-score";
 import { getCouncilAddress } from "@/lib/agent-wallets";
@@ -133,7 +133,7 @@ function parseModelJson(text: string): {
 async function handler(req: NextRequest): Promise<NextResponse> {
   const slug = (req.nextUrl.searchParams.get("persona") ?? "").toLowerCase().trim();
 
-  const persona = getPersonaBySlug(slug);
+  const persona = getCouncilPersonaBySlug(slug);
   if (!persona) return NextResponse.json({ error: `unknown persona '${slug}'` }, { status: 400 });
 
   const payTo = getCouncilAddress(slug);

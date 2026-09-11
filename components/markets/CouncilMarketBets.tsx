@@ -12,7 +12,7 @@
  * because a binary market has no claim id to fetch a feed for.
  */
 
-import { getCouncilPersonaIndex } from "@/lib/council-resolver";
+import { getCouncilPersonaBySlug } from "@/agents/council/roster";
 import { openPeepsAvatar } from "@/lib/avatars";
 import { getExplorerTxUrl } from "@/lib/chain";
 import type { VenuePositionRow } from "@/lib/db";
@@ -21,8 +21,11 @@ function shortHash(hash: string): string {
   return hash.length > 12 ? `${hash.slice(0, 6)}…${hash.slice(-4)}` : hash;
 }
 
-function ago(createdAt: number, now: number): string {
-  const seconds = Math.max(0, Math.round(now / 1000 - createdAt));
+/** `createdAt` is a millisecond epoch — the column is a bare BIGINT, so the unit
+ *  is only visible at the write site. Treating it as seconds puts every fill
+ *  roughly fifty-six thousand years in the future. */
+function ago(createdAtMs: number, nowMs: number): string {
+  const seconds = Math.max(0, Math.round((nowMs - createdAtMs) / 1000));
   if (seconds < 90) return "just now";
   if (seconds < 3_600) return `${Math.round(seconds / 60)}m ago`;
   if (seconds < 86_400) return `${Math.round(seconds / 3_600)}h ago`;
@@ -34,7 +37,6 @@ export default function CouncilMarketBets({
 }: {
   positions: VenuePositionRow[];
 }) {
-  const personas = getCouncilPersonaIndex();
   const now = Date.now();
 
   const yes = positions.filter((p) => p.outcome === "YES");
@@ -81,7 +83,8 @@ export default function CouncilMarketBets({
 
           <ol className="flex flex-col gap-4">
             {positions.map((position) => {
-              const persona = personas.get(position.agentId);
+              // Keyed by slug: the address index would never match an agent id.
+              const persona = getCouncilPersonaBySlug(position.agentId);
               const isYes = position.outcome === "YES";
               return (
                 <li

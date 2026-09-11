@@ -10,24 +10,10 @@
  */
 
 import "server-only";
-import {
-  listCouncilPersonas,
-  personaAddressEnv,
-  type PersonaSpec,
-} from "../agents/council/personas";
-import { PHILOSOPHER_PERSONAS } from "../agents/council/philosophers";
+import { personaAddressEnv, type PersonaSpec } from "../agents/council/personas";
+import { allCouncilPersonas } from "../agents/council/roster";
 
-/**
- * Every seat on the council: the ten classic frames plus the ten philosopher ones.
- *
- * listCouncilPersonas() returns only the classic set — the philosophers live in
- * their own module and were therefore invisible to every page that resolves an
- * address, even though the council worker has been running and staking them all
- * along. They share PersonaSpec, so nothing downstream has to know the difference.
- */
-function allCouncilPersonas(): PersonaSpec[] {
-  return [...listCouncilPersonas(), ...PHILOSOPHER_PERSONAS];
-}
+export { getCouncilPersonaBySlug } from "../agents/council/roster";
 
 export type ActorKind =
   | { kind: "oracle"; address: string }
@@ -74,6 +60,7 @@ export function getPersonaForAddress(address: string): PersonaSpec | null {
   if (!address) return null;
   return getCouncilPersonaIndex().get(address.toLowerCase()) ?? null;
 }
+
 
 export function classifyActor(
   address: string,
