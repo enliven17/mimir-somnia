@@ -510,7 +510,12 @@ export default function ExploreClient() {
         : t("aiSignalsCount", { count: filteredOpportunities.length });
 
   const activeBandCopy =
-    activeView === "open"
+    activeView === "markets"
+      ? {
+          title: "Live event markets",
+          hint: "Binary markets on DreamDEX. Every card carries the crowd's current price; open one to read the book and take a side.",
+        }
+      : activeView === "open"
       ? {
           title: t("openChallengesBandTitle"),
           hint: t("openChallengesBandHint"),
@@ -770,11 +775,15 @@ export default function ExploreClient() {
         <section id="arena-controls" className="mb-8" aria-label={t("filtersAriaLabel")}>
           <div className="border border-pv-border/25 bg-pv-surface p-5 sm:p-6">
             <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-              <div className="space-y-2">
+              <div className="min-w-0 space-y-2 lg:max-w-sm">
                 <p className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-pv-muted">
-                  {activeView === "open"
-                    ? t("openChallengesTab")
-                    : t("aiOpportunitiesTab")}
+                  {activeView === "markets"
+                    ? "Markets"
+                    : activeView === "open"
+                      ? t("openChallengesTab")
+                      : activeView === "closed"
+                        ? "Closed"
+                        : t("aiOpportunitiesTab")}
                 </p>
                 <div>
                   <h2 className="font-display text-xl font-bold uppercase tracking-tight text-pv-text sm:text-2xl">
@@ -786,12 +795,12 @@ export default function ExploreClient() {
                 </div>
               </div>
 
-              <div className="inline-flex w-full flex-col gap-2 border border-pv-border/15 bg-pv-bg p-2 sm:w-auto sm:flex-row sm:items-center">
+              <div className="flex w-full flex-col gap-2 border border-pv-border/15 bg-pv-bg p-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
                 <button
                   type="button"
                   onClick={() => switchView("markets")}
                   aria-pressed={activeView === "markets"}
-                  className={`flex min-h-[52px] flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-all duration-200 sm:min-w-[240px] ${
+                  className={`flex min-h-[52px] flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-all duration-200 sm:min-w-[150px] ${
                     activeView === "markets"
                       ? "border border-pv-emerald/40 bg-pv-emerald/[0.18]"
                       : "border border-transparent bg-transparent hover:border-pv-ink/[0.08] hover:bg-pv-ink/[0.03]"
@@ -815,7 +824,7 @@ export default function ExploreClient() {
                   type="button"
                   onClick={() => switchView("open")}
                   aria-pressed={activeView === "open"}
-                  className={`flex min-h-[52px] flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-all duration-200 sm:min-w-[240px] ${
+                  className={`flex min-h-[52px] flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-all duration-200 sm:min-w-[150px] ${
                     activeView === "open"
                       ? "border border-pv-emerald/40 bg-pv-emerald/[0.18]"
                       : "border border-transparent bg-transparent hover:border-pv-ink/[0.08] hover:bg-pv-ink/[0.03]"
@@ -839,7 +848,7 @@ export default function ExploreClient() {
                   type="button"
                   onClick={() => switchView("ai")}
                   aria-pressed={activeView === "ai"}
-                  className={`flex min-h-[52px] flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-all duration-200 sm:min-w-[240px] ${
+                  className={`flex min-h-[52px] flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-all duration-200 sm:min-w-[150px] ${
                     activeView === "ai"
                       ? "border border-pv-emerald/40 bg-pv-emerald/[0.18]"
                       : "border border-transparent bg-transparent hover:border-pv-ink/[0.08] hover:bg-pv-ink/[0.03]"
@@ -863,7 +872,7 @@ export default function ExploreClient() {
                   type="button"
                   onClick={() => switchView("closed")}
                   aria-pressed={activeView === "closed"}
-                  className={`flex min-h-[52px] flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-all duration-200 sm:min-w-[240px] ${
+                  className={`flex min-h-[52px] flex-1 items-center justify-between gap-3 px-4 py-3 text-left transition-all duration-200 sm:min-w-[150px] ${
                     activeView === "closed"
                       ? "border border-pv-emerald/40 bg-pv-emerald/[0.18]"
                       : "border border-transparent bg-transparent hover:border-pv-ink/[0.08] hover:bg-pv-ink/[0.03]"

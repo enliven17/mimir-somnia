@@ -1083,7 +1083,13 @@ async function run(): Promise<void> {
     }
 
     console.log(`\n[market-creator] Creating: "${candidate.question.slice(0, 60)}..."`);
-    const txHash = await createDreamDexMarket(candidate);
+    // The candidate's own question goes on chain as a VS claim. Routing these
+    // to the venue's rolling series instead threw the question away: that series
+    // mints its own generic pricefeed binaries on a schedule and ignores what
+    // was drafted, so a week of AI-written markets left the arena empty while
+    // every market on the site read "Pricefeed test: will ETH/USDC be at or
+    // above ...".
+    const txHash = await createClaim(candidate);
     if (txHash) {
       console.log(`[market-creator] ✓ Created — ${getExplorerTxUrl(txHash)}`);
       created++;
@@ -1091,6 +1097,17 @@ async function run(): Promise<void> {
     if (i < selected.length - 1 && CREATE_DELAY_MS > 0) {
       console.log(`[market-creator] Cooling down ${(CREATE_DELAY_MS / 60000).toFixed(1)} min before next market...`);
       await new Promise((r) => setTimeout(r, CREATE_DELAY_MS));
+    }
+  }
+
+  // One roll per run, after the claims, so binaries keep appearing beside the
+  // arena. The venue's series is a cadence rather than a per-candidate action
+  // and ignores the candidate it is handed, so asking for it once per run is
+  // the honest amount: per candidate it would mint markets nobody drafted.
+  if (!SHADOW_MODE && created > 0 && selected[0]) {
+    const rollTx = await createDreamDexMarket(selected[0]);
+    if (rollTx) {
+      console.log(`[market-creator] ✓ DreamDEX series rolled — ${getExplorerTxUrl(rollTx)}`);
     }
   }
 
