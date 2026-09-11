@@ -244,11 +244,22 @@ async function pollMarkets(): Promise<number> {
   const nowSeconds = Math.floor(Date.now() / 1000);
   const all = await loadDreamDexMarkets({ includeInactive: false, reload: true });
 
-  // Closest to settling first, same priority the claim phase uses: those are
-  // the markets where a persona's read is about to be graded.
+  // Priced markets first, then closest to settling.
+  //
+  // Expiry alone was the whole order, on the reasoning that those are the reads
+  // about to be graded. But the venue mints markets continuously and the newest
+  // ones expire soonest, so the cycle kept landing on books with no trades at
+  // all — and a market with no price is a market with nothing to disagree with.
+  // The contrarian has no crowd to fade, the statistician no history to fit, the
+  // rest fall under their confidence thresholds, and the round ends in twenty
+  // abstentions. A market that has traded gives every persona something to
+  // argue with; among those, soonest to settle still wins.
   const tradable = all
     .filter((market) => market.status === "Trading" && market.expiry > nowSeconds + MIN_HEADROOM_SECONDS)
-    .sort((a, b) => a.expiry - b.expiry)
+    .sort((a, b) => {
+      const priced = Number(b.tradeCount > 0) - Number(a.tradeCount > 0);
+      return priced !== 0 ? priced : a.expiry - b.expiry;
+    })
     .slice(0, MARKETS_PER_CYCLE)
     .map(toCouncilMarket);
 
