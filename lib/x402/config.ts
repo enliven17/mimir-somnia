@@ -64,6 +64,19 @@ export function priceToUsdcUnits(price: string): bigint {
 }
 
 /**
+ * A route's price as an asset and an atomic amount, not a dollar string.
+ *
+ * The SDK will happily take "$0.001", but converting it needs a default asset
+ * registered for the network, and Somnia has none — every paid route failed
+ * with "No default asset configured for network eip155:50312". Naming the asset
+ * is also the more honest declaration: the price is in this token, not in
+ * dollars that happen to be worth a token.
+ */
+export function priceFor(key: PriceKey): { asset: `0x${string}`; amount: string } {
+  return { asset: X402_ASSET, amount: priceToUsdcUnits(PRICES[key]).toString() };
+}
+
+/**
  * Bazaar discovery metadata attached to every route so agents can find these
  * services without out-of-band docs.
  */

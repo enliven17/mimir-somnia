@@ -25,6 +25,7 @@ import type { DynamicPayTo, HTTPRequestContext } from "@x402/core/http";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 
 import {
+  priceFor,
   PRICES,
   RESOURCE_META,
   X402_FACILITATOR_URL,
@@ -187,7 +188,7 @@ export function paidRoute<T>(
       accepts: {
         scheme: X402_SCHEME,
         network: X402_NETWORK,
-        price: PRICES[priceKey],
+        price: priceFor(priceKey),
         // Always a function: resolving SELLER_ADDRESS at module scope would make
         // the route fail to even load (and `next build` fail to collect page
         // data) in any environment where the var isn't set yet.
