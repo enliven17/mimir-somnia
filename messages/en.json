@@ -185,9 +185,9 @@
         "opponent": "No rain in Buenos Aires that day"
       },
       {
-        "question": "e.g. Will GPT-5 be announced before June?",
-        "creator": "OpenAI announces GPT-5 before June 1",
-        "opponent": "No GPT-5 announcement before June 1"
+        "question": "e.g. Will GPT-7 be announced before 2026 ends?",
+        "creator": "OpenAI announces GPT-7 before January 1, 2027",
+        "opponent": "No GPT-7 announcement before January 1, 2027"
       },
       {
         "question": "e.g. Will Hozier win a 2027 Grammy?",
