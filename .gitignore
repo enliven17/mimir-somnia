@@ -104,3 +104,7 @@ mimir-logo-preview.png
 
 # Compiled contract artifacts — reproduce with scripts/compile-contract.mjs
 deploy/artifacts/
+
+# Throwaway diagnostic scripts
+*.tmp.mjs
+*.tmp.ts
