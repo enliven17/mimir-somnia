@@ -460,7 +460,7 @@ export default async function StatsPage() {
               <div>
                 <div className="mb-1 flex items-baseline justify-between">
                   <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-pv-emerald">Oracle</span>
-                  <span className="font-mono tabular-nums text-pv-text">{weiToStt(agentInfo.oracleBalance).toFixed(4)} ETH</span>
+                  <span className="font-mono tabular-nums text-pv-text">{weiToStt(agentInfo.oracleBalance).toFixed(4)} STT</span>
                 </div>
                 <a className="block break-all font-mono text-[10px] text-pv-muted hover:text-pv-emerald" href={getExplorerAddressUrl(agentInfo.oracle)} target="_blank" rel="noreferrer">
                   {agentInfo.oracle}
@@ -469,7 +469,7 @@ export default async function StatsPage() {
               <div>
                 <div className="mb-1 flex items-baseline justify-between">
                   <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-pv-emerald">Market-creator (owner)</span>
-                  <span className="font-mono tabular-nums text-pv-text">{weiToStt(agentInfo.ownerBalance).toFixed(4)} ETH</span>
+                  <span className="font-mono tabular-nums text-pv-text">{weiToStt(agentInfo.ownerBalance).toFixed(4)} STT</span>
                 </div>
                 <a className="block break-all font-mono text-[10px] text-pv-muted hover:text-pv-emerald" href={getExplorerAddressUrl(agentInfo.owner)} target="_blank" rel="noreferrer">
                   {agentInfo.owner}
@@ -620,7 +620,7 @@ export default async function StatsPage() {
 
       {/* Resource links */}
       <section className="rounded-2xl border border-pv-border/30 bg-pv-surface/70 p-6">
-        <h3 className="mb-4 font-display text-lg font-bold tracking-tight text-pv-text">Get testnet ETH</h3>
+        <h3 className="mb-4 font-display text-lg font-bold tracking-tight text-pv-text">Get testnet STT</h3>
         <div className="grid gap-3 sm:grid-cols-3">
           {[
             { label: "Somnia Faucet",   href: "https://testnet.somnia.network/", desc: "Somnia Shannon testnet STT for gas + test collateral" },

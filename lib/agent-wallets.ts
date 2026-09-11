@@ -122,7 +122,7 @@ export interface AgentWriteArgs {
   args?: readonly unknown[];
   /**
    * Decimal USDC stake that must be approved for the Mimir contract before the
-   * write (createClaim / challengeClaim / createRematch). NOT native ETH.
+   * write (createClaim / challengeClaim / createRematch). NOT native STT.
    */
   amountUsdc?: string;
 }
@@ -205,7 +205,7 @@ export async function transferUsdc(args: {
 }
 
 /**
- * Transfer native ETH from an agent wallet — gas top-ups only. Agent bonuses and
+ * Transfer native STT from an agent wallet — gas top-ups only. Agent bonuses and
  * every other value transfer go through transferUsdc.
  */
 export async function transferEth(args: {
@@ -222,7 +222,7 @@ export async function transferEth(args: {
   });
   const receipt = await createSomniaPublicClient().waitForTransactionReceipt({ hash });
   if (receipt.status === "reverted") {
-    throw new Error(`ETH transfer reverted on-chain (tx ${hash})`);
+    throw new Error(`STT transfer reverted on-chain (tx ${hash})`);
   }
   return hash;
 }

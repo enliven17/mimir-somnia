@@ -537,7 +537,7 @@ async function main(): Promise<void> {
       : process.env[personaAddressEnv(p)]) as `0x${string}`;
     const bal  = await publicClient.getBalance({ address: addr }).catch(() => 0n);
     console.log(
-      `  ${p.emoji} ${p.displayName.padEnd(22)} ${addr.slice(0, 6)}…${addr.slice(-4)} · ${weiToEth(bal).toFixed(4)} ETH`,
+      `  ${p.emoji} ${p.displayName.padEnd(22)} ${addr.slice(0, 6)}…${addr.slice(-4)} · ${weiToEth(bal).toFixed(4)} STT`,
     );
   }
   console.log("═══════════════════════════════════════════════\n");

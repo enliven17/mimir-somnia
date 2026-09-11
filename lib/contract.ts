@@ -1,7 +1,7 @@
 /**
  * Mimir contract client (Somnia Shannon testnet / viem)
  *
- * Market stakes are USDC (ERC-20, 6 decimals). Gas is native ETH.
+ * Market stakes are USDC (ERC-20, 6 decimals). Gas is native STT.
  * create/challenge require the caller to approve the Mimir contract first.
  */
 import {

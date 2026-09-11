@@ -102,7 +102,7 @@ async function fetchCouncilStatsUncached(): Promise<PersonaStats[]> {
       return {
         persona,
         address: addr,
-        balanceEth:     weiToStt(balance), // gas wallet (native ETH)
+        balanceEth:     weiToStt(balance), // gas wallet (native STT)
         stakesPlaced:    logs.length,
         totalStakedUsdc: unitsToUsdc(totalStakedUnits), // USDC stakes
         recentBets:      sortedLogs.slice(0, 3).map((log: any) => ({
@@ -322,7 +322,7 @@ export default async function CouncilPage() {
               <span className="tabular-nums text-pv-text">{totalStakedUsdc.toFixed(2)}</span> USDC at risk
             </span>
             <span className="rounded-md border border-pv-border/40 bg-pv-surface2/40 px-2 py-1 text-pv-muted">
-              bankroll <span className="tabular-nums text-pv-text">{totalBankrollBot.toFixed(2)}</span> ETH gas
+              bankroll <span className="tabular-nums text-pv-text">{totalBankrollBot.toFixed(2)}</span> STT gas
             </span>
           </div>
         )}

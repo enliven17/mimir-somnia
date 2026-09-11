@@ -459,12 +459,12 @@ export default async function AgentsPage({
               </a>
             </div>
             <p className="mt-1 text-sm text-pv-text/85">
-              Reads expired claims, fetches evidence, asks an LLM, and settles. With auto-challenger on, also stakes ETH on mispriced open claims using Kelly.
+              Reads expired claims, fetches evidence, asks an LLM, and settles. With auto-challenger on, also stakes USDC on mispriced open claims using Kelly.
             </p>
             <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-pv-emerald/80">Balance</div>
-                <div className="mt-0.5 font-display text-base font-bold tabular-nums text-pv-text">{weiToStt(agentInfo.oracleBal).toFixed(2)} <span className="text-xs text-pv-muted">ETH</span></div>
+                <div className="mt-0.5 font-display text-base font-bold tabular-nums text-pv-text">{weiToStt(agentInfo.oracleBal).toFixed(2)} <span className="text-xs text-pv-muted">STT</span></div>
               </div>
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-pv-emerald/80">Settled</div>
@@ -496,7 +496,7 @@ export default async function AgentsPage({
             <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-pv-text/60">Balance</div>
-                <div className="mt-0.5 font-display text-base font-bold tabular-nums text-pv-text">{weiToStt(agentInfo.ownerBal).toFixed(2)} <span className="text-xs text-pv-muted">ETH</span></div>
+                <div className="mt-0.5 font-display text-base font-bold tabular-nums text-pv-text">{weiToStt(agentInfo.ownerBal).toFixed(2)} <span className="text-xs text-pv-muted">STT</span></div>
               </div>
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-pv-text/60">Markets opened</div>

@@ -285,7 +285,7 @@ export async function ensureSomniaShannon(ethereum: {
   }
 }
 
-// ── Gas unit helpers (native ETH, 18 decimals) ────────────────────────────────
+// ── Gas unit helpers (native STT, 18 decimals) ────────────────────────────────
 export function weiToStt(wei: bigint | number): number {
   return Number(formatEther(BigInt(wei)));
 }
